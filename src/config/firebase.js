@@ -1,7 +1,10 @@
 // backend/firebase-admin.js
 import admin from "firebase-admin";
-
+import dotenv from "dotenv";
+dotenv.config();
 // Initialize Firebase Admin SDK only once
+
+
 if (!admin.apps.length) {
   admin.initializeApp({
     credential: admin.credential.cert({
