@@ -8,7 +8,7 @@ const getTeachers = async (req, res) => {
         let query = `
             SELECT 
                 t.id, t.name AS teacher_name, t.email, t.role, t.status, t.last_seen,
-                c.name, s.name AS section, sub.name AS subject
+                c.name as class, s.name AS section, sub.name AS subject
             FROM teachers t
             LEFT JOIN teacher_allocation ta ON t.id = ta.teacher
             LEFT JOIN classes c ON ta.class = c.id
