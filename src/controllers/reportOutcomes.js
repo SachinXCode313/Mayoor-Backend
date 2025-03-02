@@ -24,9 +24,7 @@ const getReportOutcomes = async (req, res) => {
 
         // Get list of RO IDs
         const roIds = reportOutcomes.map(ro => ro.ro_id);
-
-        console.log("RO IDs:", roIds); // Debugging log
-
+        
         let learningOutcomes = [];
         if (roIds.length > 0) {
             const placeholders = roIds.map(() => "?").join(", ");
@@ -46,7 +44,6 @@ const getReportOutcomes = async (req, res) => {
                     lo_id: lo.lo_id,
                     lo_name: lo.lo_name,
                     priority: lo.priority,
-                    weight: lo.weight
                 }))
         }));
 
