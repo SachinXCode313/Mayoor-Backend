@@ -8,7 +8,6 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-app.options('*', cors()); 
 
 app.use(cors({
     origin: ["http://localhost:3000", "http://localhost:3001", "https://login-app-fawn.vercel.app", "https://mayoor-one.vercel.app"],
@@ -16,6 +15,8 @@ app.use(cors({
     credentials: true,
     allowedHeaders: '*',
 }));    
+
+app.options('*', cors()); 
 
 app.use(bodyParser.json());
 app.use(express.json());

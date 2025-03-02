@@ -13,6 +13,7 @@ import { createTeacher, getTeachers, updateTeacher } from "../controllers/teache
 import { getClassAverageLO, getClassAverageRO, getClassAverageAC} from  "../controllers/classOverviewAverage.js"
 import { saveToken,sendNotification } from "../controllers/sendNotification.js";
 import verifyToken from "../controllers/verifyToken.js";
+import getStudentReport from "../controllers/studentReport.js";
 
 const routers = express.Router();
 
@@ -32,6 +33,7 @@ routers.get('/report-outcome-mapping',getReportOutcomesMapping)
 routers.get('/class-overview-ac-avg', getClassAverageAC)
 routers.get('/class-overview-lo-avg', getClassAverageLO)
 routers.get('/class-overview-ro-avg', getClassAverageRO)
+routers.get('/student-report', getStudentReport)
 
 routers.post("/teachers", createTeacher);
 routers.post('/students',createStudent)
@@ -45,7 +47,7 @@ routers.post('/send-notifications',sendNotification)
 routers.post('/verify-token',verifyToken)
 
 routers.put('/students',updateStudentStatus)
-routers.put('/assessmentCriteriasScores.js', updateAssessmentCriteriaScore)
+routers.put('/assessment-criteria-score', updateAssessmentCriteriaScore)
 routers.put('/assessment-criteria', updateAssessmentCriteria)
 routers.put('/learning-outcome', updateLearningOutcome)
 routers.put('/learning-outcome-mapping', updateLearningOutcomeMapping)

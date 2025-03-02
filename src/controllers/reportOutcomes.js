@@ -112,15 +112,8 @@ const updateReportOutcome = async (req, res) => {
             return res.status(404).json({ message: "Report outcome not found." });
         }
 
-        // Fetch and return the updated record
-        const [updatedRO] = await db.execute(
-            "SELECT id AS ro_id, name AS ro_name FROM report_outcomes WHERE id = ?",
-            [id]
-        );
-
         res.status(200).json({
             message: "Report outcome updated successfully.",
-            report_outcome: updatedRO[0]
         });
     } catch (err) {
         console.error("Error updating report outcome:", err);

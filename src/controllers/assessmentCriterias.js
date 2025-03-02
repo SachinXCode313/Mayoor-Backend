@@ -54,10 +54,7 @@ const getAssessmentCriterias = async (req, res) => {
                 }))
         }));
 
-        return res.status(200).json({
-            message: 'Assessment criteria retrieved successfully',
-            assessments: acWithLO,
-        });
+        return res.status(200).json(acWithLO);
     } catch (err) {
         console.error('Error retrieving assessment criteria:', err);
 
