@@ -13,9 +13,9 @@ const getReportOutcomesMapping = async (req, res) => {
         }
         // Query to fetch lo_id, and priority mapped to the given ro_id
         const [rows] = await db.query(
-            `SELECT lo_id, priority
+            `SELECT lo, priority
             FROM ro_lo_mapping
-            WHERE ro_id = ?`,
+            WHERE ro = ?`,
             [ro_id]
         );
         if (rows.length === 0) {
