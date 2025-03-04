@@ -2,31 +2,41 @@
 import db from "../config/db.js";
 //get learning outcome
 const getLearningOutcomes = async (req, res) => {
-    const { year, subject, classname, quarter } = req.headers;
-
-    if (!year || !subject || !quarter || !classname) {
-        return res.status(400).json({ message: "Missing required headers: year, subject, class, or quarter" });
+    const { subject, year, quarter, classname } = req.headers;
+    console.log(`Subject: ${subject}, Year: ${year}, Quarter: ${quarter}, Class: ${classname}`);
+    // Validate required headers
+    if (!subject || !year || !quarter || !classname) {
+        return res.status(400).json({
+            message: 'Invalid input. Subject, Class, Year, and Quarter are required in the headers.',
+        });
     }
-
     try {
         // Fetch Learning Outcomes
         const loQuery = `
             SELECT id AS lo_id, name AS lo_name
             FROM learning_outcomes
-            WHERE year = ? AND subject = ? AND quarter = ? AND class = ?
+            WHERE subject = ? AND year = ? AND quarter = ? AND class = ?
         `;
-        const [learningOutcomes] = await db.execute(loQuery, [year, subject, quarter, classname]);
-
+        const [learningOutcomes] = await db.execute(loQuery, [subject, year, quarter, classname]);
         if (learningOutcomes.length === 0) {
-            return res.status(404).json({ message: "No learning outcomes found for the provided filters" });
+            return res.status(404).json({
+                message: 'No learning outcomes found for the given filters.',
+            });
         }
-
-        // Fetch ACs mapped to LOs with priority
+        // Get LO IDs
         const loIds = learningOutcomes.map(lo => lo.lo_id);
         if (loIds.length === 0) {
             return res.status(200).json(learningOutcomes); // No LOs, return empty response
         }
-
+        // Fetch ROs mapped to LOs
+        const roQuery = `
+            SELECT rlm.lo, ro.id AS ro_id, ro.name AS ro_name
+            FROM report_outcomes ro
+            JOIN ro_lo_mapping rlm ON ro.id = rlm.ro
+            WHERE rlm.lo IN (${loIds.map(() => "?").join(", ")})
+        `;
+        const [reportOutcomes] = await db.execute(roQuery, loIds);
+        // Fetch ACs mapped to LOs with priority
         const acQuery = `
             SELECT ac.id AS ac_id, ac.name AS ac_name, lam.lo, lam.priority
             FROM assessment_criterias ac
@@ -34,10 +44,15 @@ const getLearningOutcomes = async (req, res) => {
             WHERE lam.lo IN (${loIds.map(() => "?").join(", ")})
         `;
         const [assessmentCriterias] = await db.execute(acQuery, loIds);
-
-        // Map ACs to corresponding LOs with priority
-        const loWithAC = learningOutcomes.map(lo => ({
+        // Map ROs and ACs to corresponding LOs
+        const loWithMappings = learningOutcomes.map(lo => ({
             ...lo,
+            report_outcomes: reportOutcomes
+                .filter(ro => ro.lo === lo.lo_id)
+                .map(ro => ({
+                    ro_id: ro.ro_id,
+                    ro_name: ro.ro_name
+                })),
             assessment_criterias: assessmentCriterias
                 .filter(ac => ac.lo === lo.lo_id)
                 .map(ac => ({
@@ -46,11 +61,13 @@ const getLearningOutcomes = async (req, res) => {
                     priority: ac.priority
                 }))
         }));
-
-        return res.status(200).json(loWithAC);
+        return res.status(200).json(loWithMappings);
     } catch (err) {
-        console.error("Error fetching learning outcomes with assessment criterias:", err);
-        return res.status(500).json({ message: "Internal server error" });
+        console.error('Error retrieving learning outcomes:', err);
+        return res.status(500).json({
+            message: 'Server error while fetching learning outcomes',
+            error: err.message,
+        });
     }
 };
 

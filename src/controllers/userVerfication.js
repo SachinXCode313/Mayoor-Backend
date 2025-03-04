@@ -21,5 +21,21 @@ const verifyToken = async (req, res) => {
   }
 };
 
-export default verifyToken;
+const getUserRole = async (req, res) => {
+  const { email } = req.body;
+
+  try {
+    const [rows] = await db.query("SELECT role FROM users WHERE email = ?", [email]);
+
+    if (rows.length > 0) {
+      res.json({ success: true, role: rows[0].role });
+    } else {
+      res.json({ success: false, message: "User not found" });
+    }
+  } catch (error) {
+    res.status(500).json({ success: false, error: "Database error" });
+  }
+}
+
+export {verifyToken,getUserRole};
 

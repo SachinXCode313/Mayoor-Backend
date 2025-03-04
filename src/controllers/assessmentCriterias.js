@@ -249,7 +249,7 @@ const recalculateROWeightAndScore = async (connection, roId) => {
 };// Remove Assessment Criteria
 const removeAssessmentCriteria = async (req, res) => {
     const { id } = req.query; // Get ID from request params
-
+    console.log("ID : ",id);
     if (!id) {
         return res.status(400).json({
             message: 'Missing assessment criterion ID in the request.',

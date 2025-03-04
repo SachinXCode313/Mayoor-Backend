@@ -12,8 +12,9 @@ import { getLearningOutcomesMapping, updateLearningOutcomeMapping } from "../con
 import { createTeacher, getTeachers, updateTeacher } from "../controllers/teachers.js";
 import { getClassAverageLO, getClassAverageRO, getClassAverageAC} from  "../controllers/classOverviewAverage.js"
 import { saveToken,sendNotification } from "../controllers/sendNotification.js";
-import verifyToken from "../controllers/verifyToken.js";
+import {verifyToken,getUserRole} from "../controllers/userVerfication.js";
 import getStudentReport from "../controllers/studentReport.js";
+import getMappingTree from "../controllers/mappingTree.js";
 
 const routers = express.Router();
 
@@ -28,19 +29,20 @@ routers.get('/assessment-criteria-score',getAssessmentCriteriaScores)
 routers.get('/class-average-ac-score',getClassAverageACScore)
 routers.get('/class-average-lo-score',getClassAverageLOScore)
 routers.get('/class-average-ro-score',getClassAverageROScore)
-routers.get('/learning-outcome-mapping',getLearningOutcomesMapping)
-routers.get('/report-outcome-mapping',getReportOutcomesMapping)
+// routers.get('/learning-outcome-mapping',getLearningOutcomesMapping)
+// routers.get('/report-outcome-mapping',getReportOutcomesMapping)
 routers.get('/class-overview-ac-avg', getClassAverageAC)
 routers.get('/class-overview-lo-avg', getClassAverageLO)
 routers.get('/class-overview-ro-avg', getClassAverageRO)
 routers.get('/student-report', getStudentReport)
+routers.get('/mapping-tree', getMappingTree)
 
 routers.post("/teachers", createTeacher);
 routers.post('/students',createStudent)
 routers.post('/assessment-criteria',addAssessmentCriteria)
 routers.post('/learning-outcome', addLearningOutcome)
 routers.post('/assessment-criteria-score',setAssessmentCriteriaScore)
-routers.post('/learning-outcome-mapping',getLearningOutcomesMapping)
+// routers.post('/learning-outcome-mapping',getLearningOutcomesMapping)
 routers.post('/report-outcome',addReportOutcome)
 routers.post('/save-token',saveToken)
 routers.post('/send-notifications',sendNotification)
@@ -55,7 +57,8 @@ routers.put('/report-outcome-mapping',updateReportOutcomeMapping)
 routers.put("/teachers", updateTeacher);
 routers.put('/report-outcome',updateReportOutcome)
 
-routers.delete('/assessment-criteria' ,removeAssessmentCriteria)
+routers.delete('/assessment-criteria/:id' ,removeAssessmentCriteria)
 routers.delete('/learning-outcome', removeLearningOutcome)
 routers.delete('/report-outcome', removeReportOutcome)
+
 export default routers;
