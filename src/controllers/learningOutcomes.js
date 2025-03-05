@@ -225,50 +225,6 @@ const updateLearningOutcome = async (req, res) => {
         connection.release();
     }
 };
-<<<<<<< HEAD
-=======
-
-
-const recalculateROWeightAndScore = async (connection, roId) => {
-    const [loMappings] = await connection.execute(
-        `SELECT lo, priority FROM ro_lo_mapping WHERE ro = ?`,
-        [roId]
-    );
-    let totalDenominator = 0;
-    loMappings.forEach(({ priority }) => {
-        totalDenominator += priorityValues[priority] || 0;
-    });
-    if (totalDenominator === 0) {
-        throw new Error("Invalid weight calculation, check input values.");
-    }
-    const loWeightPromises = loMappings.map(async ({ lo, priority }) => {
-        const weight = (priorityValues[priority] || 0) / totalDenominator;
-        await connection.execute(
-            `UPDATE ro_lo_mapping SET weight = ? WHERE ro = ? AND lo = ?`,
-            [weight, roId, lo]
-        );
-        return weight;
-    });
-    await Promise.all(loWeightPromises);
-    // Recalculate RO Scores
-    const [studentScores] = await connection.execute(
-        `SELECT student, SUM(ls.value * rlm.weight) AS total_score
-         FROM lo_scores ls
-         JOIN ro_lo_mapping rlm ON ls.lo = rlm.lo
-         WHERE rlm.ro = ?
-         GROUP BY student`,
-        [roId]
-    );
-    for (const { student, total_score } of studentScores) {
-        await connection.execute(
-            `INSERT INTO ro_scores (student, ro, value) VALUES (?, ?, ?)
-             ON DUPLICATE KEY UPDATE value = VALUES(value)`,
-            [student, roId, total_score]
-        );
-    }
-};
-
->>>>>>> 6d0d037cac69f11e9b2a4c38e083efc5e10d7535
 const removeLearningOutcome = async (req, res) => {
     const { lo_id } = req.query; // Expecting LO ID in URL
 
