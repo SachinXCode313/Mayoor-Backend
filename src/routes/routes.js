@@ -4,7 +4,7 @@ import {getAssessmentCriterias, addAssessmentCriteria, updateAssessmentCriteria,
 import {  getLearningOutcomes,addLearningOutcome, updateLearningOutcome, removeLearningOutcome } from "../controllers/learningOutcomes.js";
 import { getReportOutcomes, addReportOutcome, updateReportOutcome, removeReportOutcome} from "../controllers/reportOutcomes.js";
 import { getAssessmentCriteriaScores, setAssessmentCriteriaScore, updateAssessmentCriteriaScore } from "../controllers/assessmentCriteriasScores.js";
-// import getLearningOutcomesScore from "../controllers/learningOutcomesScore.js";
+import getLearningOutcomesScore from "../controllers/learningOutcomesScore.js";
 // import getReportOutcomesScore from "../controllers/reportOutcomesScore.js";
 import {getReportOutcomesMapping,updateReportOutcomeMapping} from "../controllers/reportOutcomesMapping.js";
 import {  getClassAverageACScore, getClassAverageLOScore, getClassAverageROScore  } from "../controllers/classAverageScore.js";
@@ -24,7 +24,7 @@ routers.get('/assessment-criteria',getAssessmentCriterias)
 routers.get('/learning-outcome',getLearningOutcomes)
 routers.get('/report-outcome',getReportOutcomes)
 routers.get('/assessment-criteria-score',getAssessmentCriteriaScores)
-// routers.get('/learning-outcome-score',getLearningOutcomesScore)
+routers.get('/learning-outcome-score',getLearningOutcomesScore)
 // routers.get('/report-outcome-score',getReportOutcomesScore)
 routers.get('/class-average-ac-score',getClassAverageACScore)
 routers.get('/class-average-lo-score',getClassAverageLOScore)

@@ -34,7 +34,7 @@ const getClassAverageAC = async (req, res) => {
         const result = acAverages.map(row => ({
             ac_id: row.ac_id,
             ac_name: row.ac_name,
-            average_score: parseFloat(row.average_score.toFixed(3)) // Rounded to 3 decimal places
+            average_score: parseFloat(row.average_score) // Rounded to 3 decimal places
         }));
 
         res.status(200).json({ class_ac_averages: result });

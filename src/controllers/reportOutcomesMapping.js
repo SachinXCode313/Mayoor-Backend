@@ -34,7 +34,8 @@ const getReportOutcomesMapping = async (req, res) => {
 
 const updateReportOutcomeMapping = async (req, res) => {
     try {
-        const { ro_id, data } = req.body;
+        const { ro_id } = req.query;
+        const { data } = req.body;
 
         if (!data || !Array.isArray(data) || data.length === 0) {
             return res.status(400).json({ error: "Invalid data format. Expected an array of objects with lo_id and priority." });
