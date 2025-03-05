@@ -79,7 +79,7 @@ const getClassAverageLO = async (req, res) => {
         const result = loAverages.map(row => ({
             lo_id: row.lo_id,
             lo_name: row.lo_name,
-            average_score: parseFloat(row.average_score.toFixed(3)) // Rounded to 3 decimal places
+            average_score: parseFloat(row.average_score) // Rounded to 3 decimal places
         }));
 
         res.status(200).json({ class_lo_averages: result });
@@ -123,7 +123,7 @@ const getClassAverageRO = async (req, res) => {
         const result = roAverages.map(row => ({
             ro_id: row.ro_id,
             ro_name: row.ro_name,
-            average_score: parseFloat(row.average_score.toFixed(3)) // Rounded to 3 decimal places
+            average_score: parseFloat(row.average_score) // Rounded to 3 decimal places
         }));
 
         res.status(200).json({ class_ro_averages: result });
