@@ -57,7 +57,7 @@ routers.put('/report-outcome-mapping',updateReportOutcomeMapping)
 routers.put("/teachers", updateTeacher);
 routers.put('/report-outcome',updateReportOutcome)
 
-routers.delete('/assessment-criteria/:id' ,removeAssessmentCriteria)
+routers.delete('/assessment-criteria' ,removeAssessmentCriteria)
 routers.delete('/learning-outcome', removeLearningOutcome)
 routers.delete('/report-outcome', removeReportOutcome)
 
