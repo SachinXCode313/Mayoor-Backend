@@ -182,36 +182,40 @@ const updateLearningOutcome = async (req, res) => {
     }
 };
 
+
 const recalculateROWeightAndScore = async (connection, roId) => {
     const [loMappings] = await connection.execute(
         `SELECT lo, priority FROM ro_lo_mapping WHERE ro = ?`,
         [roId]
     );
-
-    let totalWeight = 0;
-    for (const { lo, priority } of loMappings) {
-        const weight = priority ? parseFloat(priority) * 10 : 10;
+    let totalDenominator = 0;
+    loMappings.forEach(({ priority }) => {
+        totalDenominator += priorityValues[priority] || 0;
+    });
+    if (totalDenominator === 0) {
+        throw new Error("Invalid weight calculation, check input values.");
+    }
+    const loWeightPromises = loMappings.map(async ({ lo, priority }) => {
+        const weight = (priorityValues[priority] || 0) / totalDenominator;
         await connection.execute(
             `UPDATE ro_lo_mapping SET weight = ? WHERE ro = ? AND lo = ?`,
             [weight, roId, lo]
         );
-        totalWeight += weight;
-    }
-
-    await connection.execute(
-        `UPDATE ro SET total_weight = ? WHERE id = ?`,
-        [totalWeight, roId]
-    );
-
+        return weight;
+    });
+    await Promise.all(loWeightPromises);
     // Recalculate RO Scores
     const [studentScores] = await connection.execute(
-        `SELECT student, SUM(value) AS total_score FROM lo_scores WHERE lo IN (SELECT lo FROM ro_lo_mapping WHERE ro = ?) GROUP BY student`,
+        `SELECT student, SUM(ls.value * rlm.weight) AS total_score
+         FROM lo_scores ls
+         JOIN ro_lo_mapping rlm ON ls.lo = rlm.lo
+         WHERE rlm.ro = ?
+         GROUP BY student`,
         [roId]
     );
-
     for (const { student, total_score } of studentScores) {
         await connection.execute(
-            `INSERT INTO ro_scores (student, ro, value) VALUES (?, ?, ?) 
+            `INSERT INTO ro_scores (student, ro, value) VALUES (?, ?, ?)
              ON DUPLICATE KEY UPDATE value = VALUES(value)`,
             [student, roId, total_score]
         );
