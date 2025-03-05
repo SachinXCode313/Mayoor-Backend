@@ -56,28 +56,32 @@ const updateReportOutcomeMapping = async (req, res) => {
 
         // Fetch existing RO-LO mappings
         const [existingMappings] = await db.query(
-            "SELECT lo_id FROM ro_lo_mapping WHERE ro_id = ?",
+            "SELECT lo FROM ro_lo_mapping WHERE ro = ?",
             [ro_id]
         );
         const mappedLoIds = existingMappings.map(row => row.lo_id);
 
         // Ensure all provided lo_ids exist in the mapping
         const inputLoIds = data.map(item => item.lo_id);
+        console.log(inputLoIds)
+        console.log(mappedLoIds)
         if (!inputLoIds.every(lo_id => mappedLoIds.includes(lo_id))) {
             return res.status(404).json({ error: "Some provided lo_ids are not mapped to the given ro_id." });
         }
 
         // Update priority in ro_lo_mapping
         for (const item of data) {
+            console.log(ro_id)
+            console.log(item.lo_id)
             await db.query(
-                "UPDATE ro_lo_mapping SET priority = ? WHERE ro_id = ? AND lo_id = ?",
+                "UPDATE ro_lo_mapping SET priority = ? WHERE ro = ? AND lo = ?",
                 [item.priority, ro_id, item.lo_id]
             );
         }
 
         // Fetch students for recalculating RO scores
         const [studentRows] = await db.query(
-            `SELECT student_id FROM ro_scores WHERE ro_id = ?`,
+            `SELECT student FROM ro_scores WHERE ro = ?`,
             [ro_id]
         );
         if (studentRows.length === 0) {
@@ -96,7 +100,7 @@ const updateReportOutcomeMapping = async (req, res) => {
                 totalDenominator += weight;
 
                 const [loScoreRows] = await db.query(
-                    "SELECT value FROM lo_scores WHERE lo_id = ? AND student_id = ?",
+                    "SELECT value FROM lo_scores WHERE lo = ? AND student = ?",
                     [lo_id, student_id]
                 );
                 if (loScoreRows.length === 0) continue;
@@ -107,7 +111,7 @@ const updateReportOutcomeMapping = async (req, res) => {
             if (totalDenominator > 0) {
                 roScore /= totalDenominator;
                 await db.query(
-                    "UPDATE ro_scores SET value = ? WHERE ro_id = ? AND student_id = ?",
+                    "UPDATE ro_scores SET value = ? WHERE ro = ? AND student = ?",
                     [roScore, ro_id, student_id]
                 );
             }
