@@ -2,45 +2,39 @@ import db from "../config/db.js";
 
 // Get All Assessment Criteria Scores for All Students in a Section
 const getAssessmentCriteriaScores = async (req, res) => {
-    const { ac_id } = req.headers;
-
-    if (!ac_id) {
-        return res.status(400).json({ message: "Missing required header: ac_id" });
+    const { ac_id, year, quarter, classname, section } = req.headers;
+    if (!ac_id || !year || !quarter || !classname || !section) {
+        return res.status(400).json({ message: "Missing required headers: ac_id, year, quarter, classname, section" });
     }
-
     try {
-        // Query to fetch all students' scores for the given ac_id
         const query = `
             SELECT sr.student, s.name AS student_name, acs.value
             FROM ac_scores acs
-            JOIN students_records sr ON acs.student = sr.id
-            JOIN students s ON sr.student = s.id
+            LEFT JOIN students_records sr ON acs.student = sr.id
+            LEFT JOIN students s ON sr.student = s.id
+            LEFT JOIN assessment_criterias ac ON acs.ac = ac.id
             WHERE acs.ac = ?
+            AND ac.year = ?
+            AND ac.quarter = ?
+            AND ac.class = ?
+            AND sr.section = ?
             ORDER BY sr.student;
         `;
-
-        const [results] = await db.execute(query, [ac_id]);
-
+        const [results] = await db.query(query, [ac_id, year, quarter, classname, section]);
         if (results.length === 0) {
-            return res.status(404).json({ message: "No assessment scores found for this assessment criterion." });
+            return res.status(404).json({ message: "No assessment scores found for the given filters." });
         }
-
-        // Structure the simplified data
         const students = results.map(({ student, student_name, value }) => ({
             student_id: student,
             student_name,
             value
         }));
-
         res.status(200).json(students);
     } catch (err) {
         console.error("Error fetching assessment scores:", err);
         res.status(500).json({ message: "Server error while fetching assessment scores", error: err.message });
     }
-};
-
-
-// Set Assessment Criteria Scores
+};// Set Assessment Criteria Scores
 const setAssessmentCriteriaScore = async (req, res) => {
     try {
         const { year, quarter, classname, section } = req.headers;
@@ -104,7 +98,7 @@ const updateAssessmentCriteriaScore = async (req, res) => {
         }
 
         const [criteriaRows] = await db.query(
-            "SELECT max_marks FROM assessment_criterias WHERE id = ? AND quarter = ? AND year = ? AND class = ? AND section = ?",
+            "SELECT max_marks FROM assessment_criterias WHERE id = ? AND quarter = ? AND year = ? AND class = ?",
             [ac_id, quarter, year, classname, section_id]
         );
 

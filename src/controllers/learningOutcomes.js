@@ -188,8 +188,17 @@ const updateLearningOutcome = async (req, res) => {
             return res.status(200).json({ message: "LO scores not recalculated due to missing AC scores or null priority." });
         }
         // 8. Recalculate LO scores using AC scores
-        await connection.query(`
-            UPDATE lo_scores ls
+        await connection.beginTransaction();
+        // Ensure LO exists
+        await connection.query(
+            `INSERT INTO lo_scores (lo, value)
+            SELECT ? , 0
+            WHERE NOT EXISTS (SELECT 1 FROM lo_scores WHERE lo = ?)`,
+            [lo_id, lo_id]
+        );
+        // Update LO Score
+        await connection.query(
+            `UPDATE lo_scores ls
             JOIN (
                 SELECT lam.lo, SUM(lam.weight * acs.value) AS new_score
                 FROM ac_scores acs
@@ -198,8 +207,9 @@ const updateLearningOutcome = async (req, res) => {
                 GROUP BY lam.lo
             ) AS subquery
             ON ls.lo = subquery.lo
-            SET ls.value = subquery.new_score;
-        `, [lo_id]);
+            SET ls.value = COALESCE(subquery.new_score, 0)`,
+            [lo_id]
+        );
         await connection.commit();
         res.status(200).json({ message: "Learning Outcome updated successfully." });
     } catch (error) {
