@@ -118,98 +118,59 @@ const addLearningOutcome = async (req, res) => {
 };
 
 
-const priorityValues = { h: 0.5, m: 0.3, l: 0.2 };
+const priorityValues = {
+    h: 0.5,
+    m: 0.3,
+    l: 0.2,
+};
 const updateLearningOutcome = async (req, res) => {
-    const { lo_id } = req.query;
-    const { loname, ro_ids } = req.body;
-    console.log(req.body)
-    if (!lo_id || !loname || !ro_ids || !Array.isArray(ro_ids) || !ro_ids.every(id => Number.isInteger(Number(id)))) {
-        return res.status(400).json({ error: "Missing or invalid parameters." });
+    const { id } = req.query;
+    const { year, quarter, classname, subject } = req.headers;
+    const { name, ro_id, priority } = req.body;
+
+    if (!id || !year || !quarter || !classname || !subject) {
+        return res.status(400).json({
+            message: "Missing required fields: year, quarter, class, subject (headers) or LO id (params)."
+        });
     }
+
+    if (!name && (!ro_id || !Array.isArray(ro_id))) {
+        return res.status(400).json({
+            message: "At least one field (name or ro_id array) is required to update."
+        });
+    }
+
     const connection = await db.getConnection();
-    await connection.beginTransaction();
     try {
-        // 1. Update LO name
-        await connection.query("UPDATE learning_outcomes SET name = ? WHERE id = ?", [loname, lo_id]);
-        // 2. Get existing RO-LO mappings
-        const [existingMappings] = await connection.query("SELECT ro FROM ro_lo_mapping WHERE lo = ?", [lo_id]);
-        const existingRoIds = existingMappings.map(row => row.ro_id);
-        // Find removed RO mappings (to recalculate scores)
-        const removedRoIds = existingRoIds.filter(id => !ro_ids.includes(id));
-        // 3. Remove existing RO-LO mappings
-        await connection.query("DELETE FROM ro_lo_mapping WHERE lo = ?", [lo_id]);
-        // 4. Insert new RO-LO mappings
-        const roLoMappingData = [];
-        for (const ro_id of ro_ids) {
-            roLoMappingData.push([ro_id, lo_id]);
-        }
-        if (roLoMappingData.length > 0) {
-            await connection.query("INSERT INTO ro_lo_mapping (ro, lo) VALUES ?", [roLoMappingData]);
-        }
-        // 5. Recalculate weights for RO-LO mappings
-        const [roLoMappings] = await connection.query("SELECT ro, priority FROM ro_lo_mapping WHERE lo = ?", [lo_id]);
-        if (roLoMappings.length > 0) {
-            let totalDenominator = 0;
-            roLoMappings.forEach(item => {
-                totalDenominator += priorityValues[item.priority] || 0;
-            });
-            if (totalDenominator > 0) {
-                for (const item of roLoMappings) {
-                    const weight = priorityValues[item.priority] / totalDenominator;
-                    await connection.query(
-                        "UPDATE ro_lo_mapping SET weight = ? WHERE lo = ? AND ro = ?",
-                        [weight, lo_id, item.ro_id]
-                    );
-                }
-            }
-        }
-        // 6. Recalculate RO scores for removed mappings
-        if (removedRoIds.length > 0) {
-            for (const ro_id of removedRoIds) {
-                await connection.query(`
-                    UPDATE ro_scores rs
-                    LEFT JOIN (
-                        SELECT rlm.ro, SUM(ls.value * rlm.weight) AS new_score
-                        FROM lo_scores ls
-                        JOIN ro_lo_mapping rlm ON ls.lo = rlm.lo
-                        WHERE rlm.ro = ?
-                        GROUP BY rlm.ro
-                    ) AS subquery
-                    ON rs.ro = subquery.ro
-                    SET rs.value = COALESCE(subquery.new_score, 0)
-                    WHERE rs.ro = ?;
-                `, [ro_id, ro_id]);
-            }
-        }
-        // 7. Ensure valid LO recalculations (skip if no AC scores or null priority)
-        const [validLoAcMappings] = await connection.query("SELECT lam.lo, acs.value, lam.priority FROM lo_ac_mapping lam JOIN ac_scores acs ON lam.ac = acs.ac WHERE lam.lo = ?", [lo_id]);
-        if (validLoAcMappings.length === 0 || validLoAcMappings.some(item => item.priority === null)) {
-            await connection.commit();
-            return res.status(200).json({ message: "LO scores not recalculated due to missing AC scores or null priority." });
-        }
-        // 8. Recalculate LO scores using AC scores
         await connection.beginTransaction();
-        // Ensure LO exists
-        await connection.query(
-            `INSERT INTO lo_scores (lo, value)
-            SELECT ? , 0
-            WHERE NOT EXISTS (SELECT 1 FROM lo_scores WHERE lo = ?)`,
-            [lo_id, lo_id]
+
+        const [existingLO] = await connection.execute(
+            `SELECT id FROM learning_outcomes WHERE id = ? AND year = ? AND quarter = ? AND class = ? AND subject = ?`,
+            [id, year, quarter, classname, subject]
         );
-        // Update LO Score
-        await connection.query(
-            `UPDATE lo_scores ls
-            JOIN (
-                SELECT lam.lo, SUM(lam.weight * acs.value) AS new_score
-                FROM ac_scores acs
-                JOIN lo_ac_mapping lam ON acs.ac = lam.ac
-                WHERE lam.lo = ?
-                GROUP BY lam.lo
-            ) AS subquery
-            ON ls.lo = subquery.lo
-            SET ls.value = COALESCE(subquery.new_score, 0)`,
-            [lo_id]
-        );
+
+        if (existingLO.length === 0) {
+            return res.status(404).json({ message: "Learning outcome not found for the given filters." });
+        }
+
+        if (name) {
+            await connection.execute(
+                `UPDATE learning_outcomes SET name = ? WHERE id = ?`,
+                [name, id]
+            );
+        }
+
+        if (ro_id) {
+            await connection.execute(`DELETE FROM ro_lo_mapping WHERE lo = ?`, [id]);
+            const mappingQuery = `INSERT INTO ro_lo_mapping (ro, lo, priority, weight) VALUES ?`;
+            const mappingValues = ro_id.map(ro => [ro, id, priority || null, null]);
+            await connection.query(mappingQuery, [mappingValues]);
+        }
+
+        for (const ro of ro_id) {
+            await recalculateROWeightAndScore(connection, ro);
+        }
+
         await connection.commit();
         res.status(200).json({ message: "Learning Outcome updated successfully." });
     } catch (error) {
@@ -217,6 +178,46 @@ const updateLearningOutcome = async (req, res) => {
         res.status(500).json({ error: error.message });
     } finally {
         connection.release();
+    }
+};
+
+
+const recalculateROWeightAndScore = async (connection, roId) => {
+    const [loMappings] = await connection.execute(
+        `SELECT lo, priority FROM ro_lo_mapping WHERE ro = ?`,
+        [roId]
+    );
+    let totalDenominator = 0;
+    loMappings.forEach(({ priority }) => {
+        totalDenominator += priorityValues[priority] || 0;
+    });
+    if (totalDenominator === 0) {
+        throw new Error("Invalid weight calculation, check input values.");
+    }
+    const loWeightPromises = loMappings.map(async ({ lo, priority }) => {
+        const weight = (priorityValues[priority] || 0) / totalDenominator;
+        await connection.execute(
+            `UPDATE ro_lo_mapping SET weight = ? WHERE ro = ? AND lo = ?`,
+            [weight, roId, lo]
+        );
+        return weight;
+    });
+    await Promise.all(loWeightPromises);
+    // Recalculate RO Scores
+    const [studentScores] = await connection.execute(
+        `SELECT student, SUM(ls.value * rlm.weight) AS total_score
+         FROM lo_scores ls
+         JOIN ro_lo_mapping rlm ON ls.lo = rlm.lo
+         WHERE rlm.ro = ?
+         GROUP BY student`,
+        [roId]
+    );
+    for (const { student, total_score } of studentScores) {
+        await connection.execute(
+            `INSERT INTO ro_scores (student, ro, value) VALUES (?, ?, ?)
+             ON DUPLICATE KEY UPDATE value = VALUES(value)`,
+            [student, roId, total_score]
+        );
     }
 };
 
