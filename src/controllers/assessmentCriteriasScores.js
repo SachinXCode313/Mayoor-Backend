@@ -1,6 +1,6 @@
 import db from "../config/db.js";
 
-// Get All Assessment Criteria Scores for All Students in a Section
+// Get All Assessment Criteria Scores for All Students in a Section - this api fixed by silly mistake
 const getAssessmentCriteriaScores = async (req, res) => {
     const { ac_id, year, quarter, classname, section } = req.headers;
     if (!ac_id || !year || !quarter || !classname || !section) {
