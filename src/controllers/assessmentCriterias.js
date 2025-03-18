@@ -129,38 +129,77 @@ const addAssessmentCriteria = async (req, res) => {
 const updateAssessmentCriteria = async (req, res) => {
     const { id } = req.query; // AC ID
     const { name, max_marks, lo_id } = req.body;
+
     if (!id || !name || !max_marks || !lo_id || !Array.isArray(lo_id)) {
         return res.status(400).json({
             message: 'Missing or invalid required fields. Ensure id (params), name, max_marks, and lo_id (array in body) are provided.',
         });
     }
+
     const connection = await db.getConnection();
     try {
+        // Fetch existing assessment criteria to check what changed
+        const [existingAC] = await connection.execute(
+            `SELECT name, max_marks FROM assessment_criterias WHERE id = ?`,
+            [id]
+        );
+        if (existingAC.length === 0) {
+            return res.status(404).json({ message: 'Assessment criterion not found.' });
+        }
+
+        const oldMaxMarks = existingAC[0].max_marks;
+        const oldName = existingAC[0].name;
+
+        // Fetch existing lo_id mappings
+        const [existingLOs] = await connection.execute(
+            `SELECT lo FROM lo_ac_mapping WHERE ac = ?`,
+            [id]
+        );
+        const oldLOs = existingLOs.map(row => row.lo);
+        
+        // Check if max_marks or lo_id has changed
+        const isMaxMarksChanged = oldMaxMarks !== max_marks;
+        const isLOsChanged = JSON.stringify(oldLOs.sort()) !== JSON.stringify(lo_id.sort());
+
+        // Update name & max_marks (Always update name, even if recalculation is not needed)
         const updateQuery = `UPDATE assessment_criterias SET name = ?, max_marks = ? WHERE id = ?`;
         const [result] = await connection.execute(updateQuery, [name, max_marks, id]);
-        if (result.affectedRows === 0) {
-            return res.status(404).json({ message: 'Assessment criterion not found or no changes made.' });
+
+        if (result.affectedRows === 0 && !isLOsChanged && !isMaxMarksChanged) {
+            return res.status(200).json({ message: 'No changes detected.' });
         }
-        const deleteMappingQuery = `DELETE FROM lo_ac_mapping WHERE ac = ?`;
-        await connection.execute(deleteMappingQuery, [id]);
-        const insertMappingQuery = `INSERT INTO lo_ac_mapping (lo, ac, priority, weight) VALUES (?, ?, NULL, NULL)`;
-        for (const lo of lo_id) {
-            await connection.execute(insertMappingQuery, [lo, id]);
+
+        // Only update lo_ac_mapping if LO mappings have changed
+        if (isLOsChanged) {
+            const deleteMappingQuery = `DELETE FROM lo_ac_mapping WHERE ac = ?`;
+            await connection.execute(deleteMappingQuery, [id]);
+
+            const insertMappingQuery = `INSERT INTO lo_ac_mapping (lo, ac, priority, weight) VALUES (?, ?, NULL, NULL)`;
+            for (const lo of lo_id) {
+                await connection.execute(insertMappingQuery, [lo, id]);
+            }
         }
-        for (const lo of lo_id) {
-            await recalculateLOWeightAndScore(connection, lo);
+
+        // Trigger recalculations only if max_marks or lo_id has changed
+        if (isMaxMarksChanged || isLOsChanged) {
+            for (const lo of lo_id) {
+                await recalculateLOWeightAndScore(connection, lo);
+            }
+            const [affectedROs] = await connection.execute(
+                `SELECT DISTINCT ro FROM ro_lo_mapping WHERE lo IN (?)`,
+                [lo_id]
+            );
+            for (const ro of affectedROs.map(r => r.ro)) {
+                await recalculateROWeightAndScore(connection, ro);
+            }
         }
-        const [affectedROs] = await connection.execute(
-            `SELECT DISTINCT ro FROM ro_lo_mapping WHERE lo IN (?)`,
-            [lo_id]
-        );
-        for (const ro of affectedROs.map(r => r.ro)) {
-            await recalculateROWeightAndScore(connection, ro);
-        }
+
         await connection.commit();
         return res.status(200).json({
-            message: 'Assessment criterion updated successfully with recalculated LO and RO weights & scores.',
+            message: 'Assessment criterion updated successfully' + 
+                     (isMaxMarksChanged || isLOsChanged ? ' with recalculated LO and RO weights & scores.' : '.'),
         });
+
     } catch (err) {
         await connection.rollback();
         console.error('Error updating assessment criteria:', err);
@@ -173,80 +212,139 @@ const updateAssessmentCriteria = async (req, res) => {
     }
 };
 
+
 const priorityValues = {
     h: 0.5,
     m: 0.3,
     l: 0.2,
 };
 
-// Function
-const recalculateLOWeightAndScore = async (connection, loId) => {
-    // Fetch all ACs mapped to this LO
-    const [acs] = await connection.execute(
-        `SELECT ac, priority FROM lo_ac_mapping WHERE lo = ?`,
-        [loId]
-    );
-    if (acs.length === 0) return;
-    let totalDenominator = 0;
-    for (const ac of acs) {
-        totalDenominator += priorityValues[ac.priority] || 0;
-    }
-    if (totalDenominator === 0) return;
-    let totalScore = 0;
-    for (const ac of acs) {
-        const [acDetails] = await connection.execute(
-            `SELECT max_marks FROM assessment_criterias WHERE id = ?`,
-            [ac.ac]
-        );
-        if (acDetails.length > 0) {
-            let weight = (priorityValues[ac.priority] || 0) / totalDenominator;
-            totalScore += acDetails[0].max_marks * weight;
-            // Update weight in mapping
-            await connection.execute(
-                `UPDATE lo_ac_mapping SET weight = ? WHERE lo = ? AND ac = ?`,
-                [weight, loId, ac.ac]
-            );
+async function recalculateLOWeightAndScore(connection, loId) {
+    try {
+        // Fetch ACs related to this LO
+        const [acs] = await connection.execute(`
+            SELECT ac.id, lo_ac.priority, ac.max_marks
+            FROM lo_ac_mapping lo_ac
+            JOIN assessment_criterias ac ON lo_ac.ac = ac.id
+            WHERE lo_ac.lo = ?`, [loId]);
+
+        let denominator = 0;
+        acs.forEach(ac => {
+            if (ac.priority === 'h') denominator += 0.5;
+            if (ac.priority === 'm') denominator += 0.3;
+            if (ac.priority === 'l') denominator += 0.2;
+        });
+
+        if (denominator === 0) return;
+
+        // Update LO weights
+        for (const ac of acs) {
+            let weight = 0;
+            if (ac.priority === 'h') weight = 0.5 / denominator;
+            if (ac.priority === 'm') weight = 0.3 / denominator;
+            if (ac.priority === 'l') weight = 0.2 / denominator;
+
+            await connection.execute(`
+                UPDATE lo_ac_mapping SET weight = ? WHERE lo = ? AND ac = ?`, 
+                [weight, loId, ac.id]);
         }
-    }
-    // Update LO score
-    await connection.execute(
-        `UPDATE learning_outcomes SET score = ? WHERE id = ?`,
-        [totalScore, loId]
-    );
-};
-const recalculateROWeightAndScore = async (connection, roId) => {
-    const [los] = await connection.execute(
-        `SELECT lo, priority FROM ro_lo_mapping WHERE ro = ?`,
-        [roId]
-    );
-    if (los.length === 0) return;
-    let totalDenominator = 0;
-    for (const lo of los) {
-        totalDenominator += priorityValues[lo.priority] || 0;
-    }
-    if (totalDenominator === 0) return;
-    let totalScore = 0;
-    for (const lo of los) {
-        const [loDetails] = await connection.execute(
-            `SELECT score FROM learning_outcomes WHERE id = ?`,
-            [lo.lo]
-        );
-        if (loDetails.length > 0) {
-            let weight = (priorityValues[lo.priority] || 0) / totalDenominator;
-            totalScore += loDetails[0].score * weight;
-            // Update weight in mapping
-            await connection.execute(
-                `UPDATE ro_lo_mapping SET weight = ? WHERE ro = ? AND lo = ?`,
-                [weight, roId, lo.lo]
-            );
+
+        // Fetch students who have scores for these ACs
+        const [students] = await connection.execute(`
+            SELECT DISTINCT student FROM assessment_scores WHERE ac IN (?)`, 
+            [acs.map(ac => ac.id)]);
+
+        // Calculate and update LO scores for each student
+        for (const student of students) {
+            let loScore = 0;
+
+            for (const ac of acs) {
+                const [scoreResult] = await connection.execute(`
+                    SELECT value FROM assessment_scores WHERE student = ? AND ac = ?`, 
+                    [student.student, ac.id]);
+
+                if (scoreResult.length > 0) {
+                    loScore += scoreResult[0].value * (ac.priority === 'h' ? 0.5 / denominator :
+                                                       ac.priority === 'm' ? 0.3 / denominator :
+                                                       ac.priority === 'l' ? 0.2 / denominator : 0);
+                }
+            }
+
+            // Insert or update LO score
+            await connection.execute(`
+                INSERT INTO lo_scores (student, lo, value) VALUES (?, ?, ?) 
+                ON DUPLICATE KEY UPDATE value = ?`, 
+                [student.student, loId, loScore, loScore]);
         }
+    } catch (error) {
+        console.error("Error recalculating LO weight & score:", error);
+        throw error;
     }
-    // Update RO score
-    await connection.execute(
-        `UPDATE report_outcomes SET score = ? WHERE id = ?`,
-        [totalScore, roId]
-    );
-};// Remove Assessment Criteria
+}
+
+
+async function recalculateROWeightAndScore(connection, roId) {
+    try {
+        // Fetch LOs related to this RO
+        const [los] = await connection.execute(`
+            SELECT lo.id, ro_lo.priority FROM ro_lo_mapping ro_lo
+            JOIN learning_outcomes lo ON ro_lo.lo = lo.id
+            WHERE ro_lo.ro = ?`, [roId]);
+
+        let denominator = 0;
+        los.forEach(lo => {
+            if (lo.priority === 'h') denominator += 0.5;
+            if (lo.priority === 'm') denominator += 0.3;
+            if (lo.priority === 'l') denominator += 0.2;
+        });
+
+        if (denominator === 0) return;
+
+        // Update RO weights
+        for (const lo of los) {
+            let weight = 0;
+            if (lo.priority === 'h') weight = 0.5 / denominator;
+            if (lo.priority === 'm') weight = 0.3 / denominator;
+            if (lo.priority === 'l') weight = 0.2 / denominator;
+
+            await connection.execute(`
+                UPDATE ro_lo_mapping SET weight = ? WHERE ro = ? AND lo = ?`, 
+                [weight, roId, lo.id]);
+        }
+
+        // Fetch students who have scores for these LOs
+        const [students] = await connection.execute(`
+            SELECT DISTINCT student FROM lo_scores WHERE lo IN (?)`, 
+            [los.map(lo => lo.id)]);
+
+        // Calculate and update RO scores for each student
+        for (const student of students) {
+            let roScore = 0;
+
+            for (const lo of los) {
+                const [scoreResult] = await connection.execute(`
+                    SELECT value FROM lo_scores WHERE student = ? AND lo = ?`, 
+                    [student.student, lo.id]);
+
+                if (scoreResult.length > 0) {
+                    roScore += scoreResult[0].value * (lo.priority === 'h' ? 0.5 / denominator :
+                                                       lo.priority === 'm' ? 0.3 / denominator :
+                                                       lo.priority === 'l' ? 0.2 / denominator : 0);
+                }
+            }
+
+            // Insert or update RO score
+            await connection.execute(`
+                INSERT INTO ro_scores (student, ro, value) VALUES (?, ?, ?) 
+                ON DUPLICATE KEY UPDATE value = ?`, 
+                [student.student, roId, roScore, roScore]);
+        }
+    } catch (error) {
+        console.error("Error recalculating RO weight & score:", error);
+        throw error;
+    }
+}
+
 const removeAssessmentCriteria = async (req, res) => {
     const { id } = req.query; // Get ID from request params
     console.log("ID : ",id);

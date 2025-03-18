@@ -1,6 +1,6 @@
 import db from "../config/db.js";
 
-// Get All Assessment Criteria Scores for All Students in a Section - this api fixed by silly mistake
+// Get All Assessment Criteria Scores for All Students in a Section
 const getAssessmentCriteriaScores = async (req, res) => {
     const { ac_id, year, quarter, classname, section } = req.headers;
     if (!ac_id || !year || !quarter || !classname || !section) {
@@ -10,7 +10,7 @@ const getAssessmentCriteriaScores = async (req, res) => {
         const query = `
             SELECT sr.student, s.name AS student_name, acs.value
             FROM ac_scores acs
-            LEFT JOIN students_records sr ON acs.student = sr.student
+            LEFT JOIN students_records sr ON acs.student = sr.id
             LEFT JOIN students s ON sr.student = s.id
             LEFT JOIN assessment_criterias ac ON acs.ac = ac.id
             WHERE acs.ac = ?
