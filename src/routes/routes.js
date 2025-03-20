@@ -4,7 +4,7 @@ import {getAssessmentCriterias, addAssessmentCriteria, updateAssessmentCriteria,
 import {  getLearningOutcomes,addLearningOutcome, updateLearningOutcome, removeLearningOutcome } from "../controllers/learningOutcomes.js";
 import { getReportOutcomes, addReportOutcome, updateReportOutcome, removeReportOutcome} from "../controllers/reportOutcomes.js";
 import { getAssessmentCriteriaScores, setAssessmentCriteriaScore, updateAssessmentCriteriaScore } from "../controllers/assessmentCriteriasScores.js";
-import getLearningOutcomesScore from "../controllers/learningOutcomesScore.js";
+import {getLearningOutcomesScore} from "../controllers/learningOutcomesScore.js";
 // import getReportOutcomesScore from "../controllers/reportOutcomesScore.js";
 import {getReportOutcomesMapping,updateReportOutcomeMapping} from "../controllers/reportOutcomesMapping.js";
 import {  getClassAverageACScore, getClassAverageLOScore, getClassAverageROScore  } from "../controllers/classAverageScore.js";
