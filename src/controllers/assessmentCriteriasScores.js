@@ -10,7 +10,7 @@ const getAssessmentCriteriaScores = async (req, res) => {
         const query = `
             SELECT sr.student, s.name AS student_name, acs.value
             FROM ac_scores acs
-            LEFT JOIN students_records sr ON acs.student = sr.id
+            LEFT JOIN students_records sr ON acs.student = sr.student
             LEFT JOIN students s ON sr.student = s.id
             LEFT JOIN assessment_criterias ac ON acs.ac = ac.id
             WHERE acs.ac = ?
