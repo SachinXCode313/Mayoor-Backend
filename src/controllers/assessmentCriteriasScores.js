@@ -61,7 +61,6 @@ const setAssessmentCriteriaScore = async (req, res) => {
         let validScores = scores
             .filter(({ student_id, obtained_marks }) => student_id && obtained_marks !== null && obtained_marks <= max_marks)
             .map(({ student_id, obtained_marks }) => [student_id, ac_id, obtained_marks / max_marks]);
-
         if (validScores.length === 0) {
             return res.status(400).json({ error: "No valid scores to insert" });
         }
@@ -110,7 +109,7 @@ const updateAssessmentCriteriaScore = async (req, res) => {
         let validScores = scores
             .filter(({ student_id, obtained_marks }) => student_id && obtained_marks !== null && obtained_marks <= max_marks)
             .map(({ student_id, obtained_marks }) => [obtained_marks / max_marks, student_id, ac_id]);
-
+        console.log(validScores)
         if (validScores.length === 0) {
             return res.status(400).json({ error: "No valid scores to update" });
         }
