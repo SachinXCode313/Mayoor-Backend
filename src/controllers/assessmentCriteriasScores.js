@@ -1,4 +1,6 @@
 import db from "../config/db.js";
+import { recalculateLOScore } from "./learningOutcomesMapping.js";
+import { recalculateROScore } from "./reportOutcomesMapping.js";
 
 // Get All Assessment Criteria Scores for All Students in a Section
 const getAssessmentCriteriaScores = async (req, res) => {
@@ -34,37 +36,76 @@ const getAssessmentCriteriaScores = async (req, res) => {
         console.error("Error fetching assessment scores:", err);
         res.status(500).json({ message: "Server error while fetching assessment scores", error: err.message });
     }
-};// Set Assessment Criteria Scores
+};
+
+// Set Assessment Criteria Scores (POST)
 const setAssessmentCriteriaScore = async (req, res) => {
     try {
         const { year, quarter, classname, section } = req.headers;
         const { ac_id, scores } = req.body;
 
+        const result = await recalculateAcScores(ac_id, year, quarter, classname, section, scores);
+        if (result.success) {
+            return res.status(201).json({ message: result.message });
+        } else {
+            return res.status(400).json({ error: result.error });
+        }
+    } catch (error) {
+        res.status(500).json({ error: "Internal Server Error" });
+    }
+};
+
+// Update Assessment Criteria Scores (PUT)
+const updateAssessmentCriteriaScore = async (req, res) => {
+    try {
+        const { year, quarter, classname, section } = req.headers;
+        const { ac_id, scores } = req.body;
+
+        const result = await recalculateAcScores(ac_id, year, quarter, classname, section, scores);
+        if (result.success) {
+            return res.status(200).json({ message: result.message });
+        } else {
+            return res.status(400).json({ error: result.error });
+        }
+    } catch (error) {
+        res.status(500).json({ error: "Internal Server Error" });
+    }
+};
+const recalculateAcScores = async (ac_id, year, quarter, classname, section, scores) => {
+    const connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    try {
         if (!ac_id || !scores || !Array.isArray(scores) || scores.length === 0) {
-            return res.status(400).json({ error: "ac_id and an array of scores (student_id, obtained_marks) are required in the body" });
+            throw new Error("ac_id and valid scores array are required.");
         }
 
         if (!year || !quarter || !classname || !section) {
-            return res.status(400).json({ error: "year, quarter, classname, and sectionare required in the headers" });
+            throw new Error("year, quarter, classname, and section are required.");
         }
 
-        const [criteriaRows] = await db.query(
+        // Fetch max_marks for the assessment criteria
+        const [criteriaRows] = await connection.query(
             "SELECT max_marks FROM assessment_criterias WHERE id = ? AND quarter = ? AND year = ? AND class = ?",
             [ac_id, quarter, year, classname]
         );
 
         if (criteriaRows.length === 0) {
-            return res.status(404).json({ error: "Assessment criteria not found for the given parameters" });
+            throw new Error("Assessment criteria not found.");
         }
 
         const max_marks = criteriaRows[0].max_marks;
+
+        // Normalize and filter valid scores
         let validScores = scores
             .filter(({ student_id, obtained_marks }) => student_id && obtained_marks !== null && obtained_marks <= max_marks)
             .map(({ student_id, obtained_marks }) => [student_id, ac_id, obtained_marks / max_marks]);
+
         if (validScores.length === 0) {
-            return res.status(400).json({ error: "No valid scores to insert" });
+            throw new Error("No valid scores to process.");
         }
 
+        // Insert or update AC scores
         const valuesPlaceholder = validScores.map(() => "(?, ?, ?)").join(", ");
         const flattenedValues = validScores.flat();
 
@@ -73,62 +114,51 @@ const setAssessmentCriteriaScore = async (req, res) => {
             VALUES ${valuesPlaceholder}
             ON DUPLICATE KEY UPDATE value = VALUES(value);
         `;
-        await db.query(query, flattenedValues);
+        await connection.query(query, flattenedValues);
 
-        res.status(201).json({ message: `${validScores.length} scores saved successfully.` });
-    } catch (error) {
-        console.error("Error processing scores:", error.message);
-        res.status(500).json({ error: "Internal Server Error" });
-    }
-};
-
-// Update Assessment Criteria Scores
-const updateAssessmentCriteriaScore = async (req, res) => {
-    try {
-        const { year, quarter, classname, section_id } = req.headers;
-        const { ac_id, scores } = req.body;
-
-        if (!ac_id || !scores || !Array.isArray(scores) || scores.length === 0) {
-            return res.status(400).json({ error: "ac_id and an array of scores (student_id, obtained_marks) are required in the body" });
-        }
-
-        if (!year || !quarter || !classname || !section_id) {
-            return res.status(400).json({ error: "year, quarter, classname, and section_id are required in the headers" });
-        }
-
-        const [criteriaRows] = await db.query(
-            "SELECT max_marks FROM assessment_criterias WHERE id = ? AND quarter = ? AND year = ? AND class = ?",
-            [ac_id, quarter, year, classname, section_id]
+        // Trigger LO Score Recalculation
+        const [loMappings] = await connection.query(
+            "SELECT lo, priority FROM lo_ac_mapping WHERE ac = ?",
+            [ac_id]
         );
 
-        if (criteriaRows.length === 0) {
-            return res.status(404).json({ error: "Assessment criteria not found for the given parameters" });
+        if (loMappings.length > 0) {
+            for (const { lo, priority } of loMappings) {
+                if (priority) {
+                    const result = await recalculateLOScore(connection, lo);
+                    console.log(result.message);
+                } else {
+                    console.warn(`Skipping LO (${lo}): No priority assigned.`);
+                }
+            }
         }
 
-        const max_marks = criteriaRows[0].max_marks;
-        let validScores = scores
-            .filter(({ student_id, obtained_marks }) => student_id && obtained_marks !== null && obtained_marks <= max_marks)
-            .map(({ student_id, obtained_marks }) => [obtained_marks / max_marks, student_id, ac_id]);
-        console.log(validScores)
-        if (validScores.length === 0) {
-            return res.status(400).json({ error: "No valid scores to update" });
+        // Trigger RO Score Recalculation
+        const [roMappings] = await connection.query(
+            "SELECT ro, priority FROM ro_lo_mapping WHERE lo IN (SELECT lo FROM lo_ac_mapping WHERE ac = ?)",
+            [ac_id]
+        );
+
+        if (roMappings.length > 0) {
+            for (const { ro, priority } of roMappings) {
+                if (priority) {
+                    const result = await recalculateROScore(connection, ro);
+                    console.log(result.message);
+                } else {
+                    console.warn(`Skipping RO (${ro}): No priority assigned.`);
+                }
+            }
         }
 
-        const query = `
-            UPDATE ac_scores 
-            SET value = ? 
-            WHERE student = ? AND ac = ?;
-        `;
-
-        for (const score of validScores) {
-            await db.query(query, score);
-        }
-
-        res.status(200).json({ message: `${validScores.length} scores updated successfully.` });
+        await connection.commit();
+        return { success: true, message: `${validScores.length} scores processed successfully.` };
     } catch (error) {
-        console.error("Error updating scores:", error.message);
-        res.status(500).json({ error: "Internal Server Error" });
+        await connection.rollback();
+        console.error("Error recalculating AC scores:", error.message);
+        return { success: false, error: error.message };
+    } finally {
+        connection.release();
     }
 };
 
-export { getAssessmentCriteriaScores, setAssessmentCriteriaScore, updateAssessmentCriteriaScore };
+export { getAssessmentCriteriaScores, recalculateAcScores, setAssessmentCriteriaScore, updateAssessmentCriteriaScore };

@@ -3,22 +3,22 @@ import db from "../config/db.js";
 // Get Report Outcomes Score
 const getReportOutcomesScore = async (req, res) => {
     try {
-        const { student_id } = req.headers;
-        if (!student_id) {
+        const { student } = req.headers;
+        if (!student ) {
             return res.status(400).json({
-                error: "student_id header is required.",
+                error: "student header is required.",
             });
         }
         // Fetch the report outcome scores for the given student_id
         const [roScores] = await db.query(
-            `SELECT rs.ro_id, rs.value
+            `SELECT rs.ro, rs.value
             FROM ro_scores rs
-            WHERE rs.student_id = ?`,
-            [student_id]
+            WHERE rs.student = ?`,
+            [student]
         );
         if (roScores.length === 0) {
             return res.status(404).json({
-                error: "No ro_scores found for the provided student_id.",
+                error: "No ro_scores found for the provided student.",
             });
         }
         // Calculate the total score and average score
@@ -36,5 +36,4 @@ const getReportOutcomesScore = async (req, res) => {
         });
     }
 }   
-
-export default getReportOutcomesScore
+export { getReportOutcomesScore };
