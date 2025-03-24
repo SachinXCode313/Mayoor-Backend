@@ -1,5 +1,5 @@
 import db from "../config/db.js";
-
+import { recalculateROScore } from "./reportOutcomesMapping.js";
 const recalculateLOScore = async (connection, lo_id, studentIds) => {
     try {
         // Priority values
@@ -23,20 +23,34 @@ const recalculateLOScore = async (connection, lo_id, studentIds) => {
         const totalWeight = (hCount * priorityValues.h) + (mCount * priorityValues.m) + (lCount * priorityValues.l);
         if (totalWeight === 0) return; // Avoid division by zero
 
-        const hWeight = (priorityValues.h) / totalWeight;
-        const mWeight = (priorityValues.m) / totalWeight;
-        const lWeight = (priorityValues.l) / totalWeight;
+        const hWeight = (priorityValues.h * hCount) / totalWeight;
+        const mWeight = (priorityValues.m * mCount) / totalWeight;
+        const lWeight = (priorityValues.l * lCount) / totalWeight;
+
+        // Update weights in the lo_ac_mapping table
+        for (const { ac, priority } of mappings) {
+            let weight = 0;
+            if (priority === 'h') weight = hWeight;
+            else if (priority === 'm') weight = mWeight;
+            else if (priority === 'l') weight = lWeight;
+
+            // Update the weight column for each mapping
+            await connection.query(
+                "UPDATE lo_ac_mapping SET weight = ? WHERE lo = ? AND ac = ?",
+                [weight, lo_id, ac]
+            );
+        }
 
         // Recalculate LO Scores for each student
-        for (const student_id of studentIds) {
+        for (const {student_id} of studentIds) {
             let weightedSum = 0;
+            console.log(student_id)
 
             for (const { ac, priority } of mappings) {
                 let weight = 0;
                 if (priority === 'h') weight = hWeight;
                 else if (priority === 'm') weight = mWeight;
                 else if (priority === 'l') weight = lWeight;
-
                 // Fetch the AC score for the student
                 const [acScoreRows] = await connection.query(
                     "SELECT value FROM ac_scores WHERE ac = ? AND student = ?",
@@ -49,8 +63,7 @@ const recalculateLOScore = async (connection, lo_id, studentIds) => {
             }
 
             // Calculate LO score
-            const loScore = weightedSum;
-
+            const loScore = weightedSum/mappings.length;
             // Insert or update LO Score
             await connection.query(
                 "INSERT INTO lo_scores (lo, student, value) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE value = ?",
@@ -58,14 +71,14 @@ const recalculateLOScore = async (connection, lo_id, studentIds) => {
             );
         }
 
-        // Trigger RO Score Recalculation
-        const [roMappings] = await connection.query(
-            "SELECT DISTINCT ro FROM ro_lo_mapping WHERE lo = ?",
-            [lo_id]
-        );
-        for (const { ro } of roMappings) {
-            await recalculateROScore(connection, ro);
-        }
+        // // Trigger RO Score Recalculation
+        // const [roMappings] = await connection.query(
+        //     "SELECT DISTINCT ro FROM ro_lo_mapping WHERE lo = ?",
+        //     [lo_id]
+        // );
+        // for (const { ro } of roMappings) {
+        //     await recalculateROScore(connection, ro);
+        // }
     } catch (error) {
         console.error("Error recalculating LO score:", error);
     }

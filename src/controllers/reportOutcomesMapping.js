@@ -7,7 +7,7 @@ const recalculateROScore = async (connection, ro_id) => {
 
         // Fetch all students linked to the given RO
         const [studentRows] = await connection.query(
-            "SELECT DISTINCT student FROM lo_scores WHERE lo IN (SELECT lo FROM ro_lo_mapping WHERE ro = ?)",
+            "SELECT student FROM lo_scores WHERE lo IN (SELECT lo FROM ro_lo_mapping WHERE ro = ?)",
             [ro_id]
         );
         if (studentRows.length === 0) return;
@@ -32,11 +32,20 @@ const recalculateROScore = async (connection, ro_id) => {
         const totalWeight = (hCount * priorityValues.h) + (mCount * priorityValues.m) + (lCount * priorityValues.l);
         if (totalWeight === 0) return; // Avoid division by zero
 
-        const hWeight = (priorityValues.h) / totalWeight;
-        const mWeight = (priorityValues.m) / totalWeight;
-        const lWeight = (priorityValues.l) / totalWeight;
+        const hWeight = (priorityValues.h * hCount) / totalWeight;
+        const mWeight = (priorityValues.m * mCount) / totalWeight;
+        const lWeight = (priorityValues.l * lCount) / totalWeight;
 
         // Recalculate RO Scores for each student
+        for (const { lo, priority } of mappings) {
+            let weight = 0;
+            if (priority === 'h') weight = hWeight;
+            else if (priority === 'm') weight = mWeight;
+            else if (priority === 'l') weight = lWeight;
+            // Update the weight in the ro_lo_mapping table
+            await connection.query(
+                "UPDATE ro_lo_mapping SET weight = ? WHERE ro = ? AND lo = ?",
+                [weight, ro_id, lo]);}
         for (const student_id of studentIds) {
             let weightedSum = 0;
 
@@ -58,7 +67,7 @@ const recalculateROScore = async (connection, ro_id) => {
             }
 
             // Calculate RO score
-            const roScore = weightedSum;
+            const roScore = weightedSum/mappings.length;
 
             // Insert or update RO Score
             await connection.query(
@@ -128,7 +137,7 @@ const updateReportOutcomeMapping = async (req, res) => {
             // If the mapping doesn't exist, insert it
             if (!existingMappingMap.has(lo_id)) {
                 await connection.query(
-                    "INSERT INTO ro_lo_mapping (ro, lo, priority, weight) VALUES (?, ?, ?, ?)",
+                    "INSERT INTO ro_lo_mapping (ro, lo, priority, weight) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE priority = VALUES(priority), weight = VALUES(weight);",
                     [ro_id, lo_id, priority, weight]
                 );
                 mappingChanged = true;

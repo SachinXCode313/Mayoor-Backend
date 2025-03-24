@@ -4,8 +4,8 @@ import { recalculateROScore } from "./reportOutcomesMapping.js";
 
 // Get All Assessment Criteria Scores for All Students in a Section
 const getAssessmentCriteriaScores = async (req, res) => {
-    const { ac_id, year, quarter, classname, section } = req.headers;
-    if (!ac_id || !year || !quarter || !classname || !section) {
+    const { ac_id, year, quarter, classname } = req.headers;
+    if (!ac_id || !year || !quarter || !classname ) {
         return res.status(400).json({ message: "Missing required headers: ac_id, year, quarter, classname, section" });
     }
     try {
@@ -19,10 +19,9 @@ const getAssessmentCriteriaScores = async (req, res) => {
             AND ac.year = ?
             AND ac.quarter = ?
             AND ac.class = ?
-            AND sr.section = ?
             ORDER BY sr.student;
         `;
-        const [results] = await db.query(query, [ac_id, year, quarter, classname, section]);
+        const [results] = await db.query(query, [ac_id, year, quarter, classname]);
         if (results.length === 0) {
             return res.status(404).json({ message: "No assessment scores found for the given filters." });
         }
@@ -76,6 +75,7 @@ const recalculateAcScores = async (ac_id, year, quarter, classname, section, sco
     await connection.beginTransaction();
 
     try {
+        
         if (!ac_id || !scores || !Array.isArray(scores) || scores.length === 0) {
             throw new Error("ac_id and valid scores array are required.");
         }
@@ -83,27 +83,25 @@ const recalculateAcScores = async (ac_id, year, quarter, classname, section, sco
         if (!year || !quarter || !classname || !section) {
             throw new Error("year, quarter, classname, and section are required.");
         }
-
         // Fetch max_marks for the assessment criteria
         const [criteriaRows] = await connection.query(
             "SELECT max_marks FROM assessment_criterias WHERE id = ? AND quarter = ? AND year = ? AND class = ?",
-            [ac_id, quarter, year, classname]
+            [ac_id, quarter, year, classname] // Check if 'class' should be 'classname'
         );
-
-        if (criteriaRows.length === 0) {
-            throw new Error("Assessment criteria not found.");
+        
+        const max_marks = criteriaRows[0]?.max_marks;
+        if (!max_marks) {
+            throw new Error("Max marks not set for this assessment criteria.");
         }
-
-        const max_marks = criteriaRows[0].max_marks;
-
-        // Normalize and filter valid scores
+        
         let validScores = scores
             .filter(({ student_id, obtained_marks }) => student_id && obtained_marks !== null && obtained_marks <= max_marks)
             .map(({ student_id, obtained_marks }) => [student_id, ac_id, obtained_marks / max_marks]);
-
+        
         if (validScores.length === 0) {
             throw new Error("No valid scores to process.");
         }
+        
 
         // Insert or update AC scores
         const valuesPlaceholder = validScores.map(() => "(?, ?, ?)").join(", ");
@@ -125,8 +123,7 @@ const recalculateAcScores = async (ac_id, year, quarter, classname, section, sco
         if (loMappings.length > 0) {
             for (const { lo, priority } of loMappings) {
                 if (priority) {
-                    const result = await recalculateLOScore(connection, lo);
-                    console.log(result.message);
+                    const result = await recalculateLOScore(connection, lo,scores);
                 } else {
                     console.warn(`Skipping LO (${lo}): No priority assigned.`);
                 }
@@ -138,15 +135,14 @@ const recalculateAcScores = async (ac_id, year, quarter, classname, section, sco
             "SELECT ro, priority FROM ro_lo_mapping WHERE lo IN (SELECT lo FROM lo_ac_mapping WHERE ac = ?)",
             [ac_id]
         );
-
+        console.log("working...")
         if (roMappings.length > 0) {
             for (const { ro, priority } of roMappings) {
                 if (priority) {
                     const result = await recalculateROScore(connection, ro);
-                    console.log(result.message);
                 } else {
                     console.warn(`Skipping RO (${ro}): No priority assigned.`);
-                }
+                } 
             }
         }
 

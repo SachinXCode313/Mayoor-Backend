@@ -1,4 +1,5 @@
 import { adminAuth } from "../config/firebase.js";
+import db from "../config/db.js";
 
 const verifyToken = async (req, res) => {
   const { token } = req.body;
@@ -21,21 +22,27 @@ const verifyToken = async (req, res) => {
   }
 };
 
-const getUserRole = async (req, res) => {
-  const { email } = req.body;
+const verifyUser = (req, res) => {
+  const { email } = req.query;
 
-  try {
-    const [rows] = await db.query("SELECT role FROM users WHERE email = ?", [email]);
-
-    if (rows.length > 0) {
-      res.json({ success: true, role: rows[0].role });
-    } else {
-      res.json({ success: false, message: "User not found" });
-    }
-  } catch (error) {
-    res.status(500).json({ success: false, error: "Database error" });
+  if (!email) {
+    return res.status(400).json({ error: "Email is required" });
   }
+
+  const query = "SELECT role FROM teachers WHERE email = ?";
+
+  db.query(query, [email], (err, results) => {
+    if (err) {
+      return res.status(500).json({ error: "Database query failed" });
+    }
+
+    if (results.length === 0) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    return res.json({ role });
+  });
 }
 
-export {verifyToken,getUserRole};
+export {verifyToken,verifyUser};
 

@@ -91,7 +91,7 @@ const addReportOutcome = async (req, res) => {
 
 
 // UPDATE Report Outcome
-const updateReportOutcome = async (req, res) => {
+const   updateReportOutcome = async (req, res) => {
     const { id } = req.query;
     const { name } = req.body;
 
