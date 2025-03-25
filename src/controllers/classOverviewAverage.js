@@ -6,67 +6,57 @@ const getClassAverageAC = async (req, res) => {
         const { subject, classname, year, quarter, section } = req.headers;
 
         if (!subject || !classname || !year || !quarter || !section) {
-            return res.status(400).json({
-                error: "Missing required headers: subject, classname, year, quarter, or section.",
-            });
+            return res.status(400).json({ error: "Missing required headers." });
         }
 
-        // Fetch AC averages along with student count in each group (adjusting range for 0-1 scale)
+        // Fetch AC averages and student counts per range
         const [acAverages] = await db.query(`
             SELECT 
                 ac.id AS ac_id, ac.name AS ac_name, 
-                AVG(ascore.value) AS average_score,
-                SUM(CASE WHEN ascore.value > 0.67 THEN 1 ELSE 0 END) AS above_0_67,
-                SUM(CASE WHEN ascore.value BETWEEN 0.35 AND 0.67 THEN 1 ELSE 0 END) AS between_0_35_0_67,
-                SUM(CASE WHEN ascore.value < 0.35 THEN 1 ELSE 0 END) AS below_0_35
-            FROM ac_scores ascore
-            JOIN students_records sr ON ascore.student = sr.id
-            JOIN assessment_criterias ac ON ascore.ac = ac.id
-            WHERE sr.year = ? AND sr.class = ? AND sr.section = ? 
-              AND ac.subject = ? AND ac.quarter = ?
+                COALESCE(AVG(ascr.value), NULL) AS average_score,
+                COALESCE(SUM(CASE WHEN ascr.value > 0.67 THEN 1 ELSE 0 END), 0) AS above_0_67,
+                COALESCE(SUM(CASE WHEN ascr.value BETWEEN 0.35 AND 0.67 THEN 1 ELSE 0 END), 0) AS between_0_35_0_67,
+                COALESCE(SUM(CASE WHEN ascr.value < 0.35 THEN 1 ELSE 0 END), 0) AS below_0_35
+            FROM assessment_criterias ac
+            LEFT JOIN ac_scores ascr ON ascr.ac = ac.id
+            LEFT JOIN students_records sr ON ascr.student = sr.id
+            WHERE ac.subject = ? AND ac.quarter = ?
+              AND (sr.year = ? AND sr.class = ? AND sr.section = ? OR sr.id IS NULL)
             GROUP BY ac.id, ac.name
             ORDER BY ac.id;
-        `, [year, classname, section, subject, quarter]);
+        `, [subject, quarter, year, classname, section]);
 
-        if (acAverages.length === 0) {
-            return res.status(404).json({ error: "No AC scores found for the provided filters." });
-        }
-
-        // Fetch students grouped by score ranges, joining with the `students` table
+        // Fetch students grouped by score ranges
         const [students] = await db.query(`
-            SELECT 
-                ascore.ac AS ac_id, 
-                sr.id AS student_record_id, 
-                s.id AS student_id, s.name AS student_name, 
-                ascore.value AS score
-            FROM ac_scores ascore
-            JOIN students_records sr ON ascore.student = sr.id
+            SELECT ascr.ac AS ac_id, s.id AS student_id, s.name AS student_name, ascr.value AS score
+            FROM ac_scores ascr
+            JOIN students_records sr ON ascr.student = sr.id
             JOIN students s ON sr.student = s.id
-            JOIN assessment_criterias ac ON ascore.ac = ac.id
             WHERE sr.year = ? AND sr.class = ? AND sr.section = ? 
-              AND ac.subject = ? AND ac.quarter = ?;
+              AND ascr.ac IN (SELECT id FROM assessment_criterias WHERE subject = ? AND quarter = ?);
         `, [year, classname, section, subject, quarter]);
 
-        // Organizing students into groups based on the 0-1 range
+        // Group students by score range and remove `ac_id`
         const studentGroups = {};
-        students.forEach(student => {
-            if (!studentGroups[student.ac_id]) {
-                studentGroups[student.ac_id] = { above_0_67: [], between_0_35_0_67: [], below_0_35: [] };
+        students.forEach(({ ac_id, student_id, student_name, score }) => {
+            if (!studentGroups[ac_id]) {
+                studentGroups[ac_id] = { above_0_67: [], between_0_35_0_67: [], below_0_35: [] };
             }
-            if (student.score > 0.67) {
-                studentGroups[student.ac_id].above_0_67.push({ id: student.student_id, name: student.student_name });
-            } else if (student.score >= 0.35 && student.score <= 0.67) {
-                studentGroups[student.ac_id].between_0_35_0_67.push({ id: student.student_id, name: student.student_name });
+            const studentObj = { student_id, student_name, score };
+            if (score > 0.67) {
+                studentGroups[ac_id].above_0_67.push(studentObj);
+            } else if (score >= 0.35 && score <= 0.67) {
+                studentGroups[ac_id].between_0_35_0_67.push(studentObj);
             } else {
-                studentGroups[student.ac_id].below_0_35.push({ id: student.student_id, name: student.student_name });
+                studentGroups[ac_id].below_0_35.push(studentObj);
             }
         });
 
-        // Merging student data into AC averages
+        // Format the final response
         const result = acAverages.map(row => ({
             ac_id: row.ac_id,
             ac_name: row.ac_name,
-            average_score: parseFloat(row.average_score),
+            average_score: row.average_score !== null ? parseFloat(row.average_score) : null,
             student_counts: {
                 above_0_67: row.above_0_67,
                 between_0_35_0_67: row.between_0_35_0_67,
@@ -82,76 +72,61 @@ const getClassAverageAC = async (req, res) => {
     }
 };
 
-
-
-
-// Get average scores for LO along with student count in score categories
 const getClassAverageLO = async (req, res) => {
     try {
         const { subject, classname, year, quarter, section } = req.headers;
 
         if (!subject || !classname || !year || !quarter || !section) {
-            return res.status(400).json({
-                error: "Missing required headers: subject, classname, year, quarter, or section.",
-            });
+            return res.status(400).json({ error: "Missing required headers." });
         }
 
-        // Fetch LO averages along with student count in each group (adjusting range for 0-1 scale)
+        // Fetch LO averages along with student counts per score category
         const [loAverages] = await db.query(`
             SELECT 
                 lo.id AS lo_id, lo.name AS lo_name, 
-                AVG(ls.value) AS average_score,
-                SUM(CASE WHEN ls.value > 0.67 THEN 1 ELSE 0 END) AS above_0_67,
-                SUM(CASE WHEN ls.value BETWEEN 0.35 AND 0.67 THEN 1 ELSE 0 END) AS between_0_35_0_67,
-                SUM(CASE WHEN ls.value < 0.35 THEN 1 ELSE 0 END) AS below_0_35
-            FROM lo_scores ls
-            JOIN students_records sr ON ls.student = sr.id
-            JOIN learning_outcomes lo ON ls.lo = lo.id
-            WHERE sr.year = ? AND sr.class = ? AND sr.section = ? 
-              AND lo.subject = ? AND lo.quarter = ?
+                COALESCE(AVG(ls.value), NULL) AS average_score,
+                COALESCE(SUM(CASE WHEN ls.value > 0.67 THEN 1 ELSE 0 END), 0) AS above_0_67,
+                COALESCE(SUM(CASE WHEN ls.value BETWEEN 0.35 AND 0.67 THEN 1 ELSE 0 END), 0) AS between_0_35_0_67,
+                COALESCE(SUM(CASE WHEN ls.value < 0.35 THEN 1 ELSE 0 END), 0) AS below_0_35
+            FROM learning_outcomes lo
+            LEFT JOIN lo_scores ls ON ls.lo = lo.id
+            LEFT JOIN students_records sr ON ls.student = sr.id
+            WHERE lo.subject = ? AND lo.quarter = ?
+              AND (sr.year = ? AND sr.class = ? AND sr.section = ? OR sr.id IS NULL)
             GROUP BY lo.id, lo.name
             ORDER BY lo.id;
-        `, [year, classname, section, subject, quarter]);
+        `, [subject, quarter, year, classname, section]);
 
-        if (loAverages.length === 0) {
-            return res.status(404).json({ error: "No LO scores found for the provided filters." });
-        }
-
-        // Fetch students grouped by score ranges, joining with the `students` table
+        // Fetch students grouped by score ranges
         const [students] = await db.query(`
-            SELECT 
-                ls.lo AS lo_id, 
-                sr.id AS student_record_id, 
-                s.id AS student_id, s.name AS student_name, 
-                ls.value AS score
+            SELECT ls.lo AS lo_id, s.id AS student_id, s.name AS student_name, ls.value AS score
             FROM lo_scores ls
             JOIN students_records sr ON ls.student = sr.id
             JOIN students s ON sr.student = s.id
-            JOIN learning_outcomes lo ON ls.lo = lo.id
             WHERE sr.year = ? AND sr.class = ? AND sr.section = ? 
-              AND lo.subject = ? AND lo.quarter = ?;
+              AND ls.lo IN (SELECT id FROM learning_outcomes WHERE subject = ? AND quarter = ?);
         `, [year, classname, section, subject, quarter]);
 
-        // Organizing students into groups based on the 0-1 range
+        // Group students by their score range
         const studentGroups = {};
         students.forEach(student => {
             if (!studentGroups[student.lo_id]) {
                 studentGroups[student.lo_id] = { above_0_67: [], between_0_35_0_67: [], below_0_35: [] };
             }
             if (student.score > 0.67) {
-                studentGroups[student.lo_id].above_0_67.push({ id: student.student_id, name: student.student_name });
+                studentGroups[student.lo_id].above_0_67.push(student);
             } else if (student.score >= 0.35 && student.score <= 0.67) {
-                studentGroups[student.lo_id].between_0_35_0_67.push({ id: student.student_id, name: student.student_name });
+                studentGroups[student.lo_id].between_0_35_0_67.push(student);
             } else {
-                studentGroups[student.lo_id].below_0_35.push({ id: student.student_id, name: student.student_name });
+                studentGroups[student.lo_id].below_0_35.push(student);
             }
         });
 
-        // Merging student data into LO averages
+        // Format the final response
         const result = loAverages.map(row => ({
             lo_id: row.lo_id,
             lo_name: row.lo_name,
-            average_score: parseFloat(row.average_score),
+            average_score: row.average_score !== null ? parseFloat(row.average_score) : null,
             student_counts: {
                 above_0_67: row.above_0_67,
                 between_0_35_0_67: row.between_0_35_0_67,
@@ -167,75 +142,62 @@ const getClassAverageLO = async (req, res) => {
     }
 };
 
-
-// Get average scores for RO along with student count in score categories
 const getClassAverageRO = async (req, res) => {
     try {
         const { subject, classname, year, section } = req.headers;
 
         if (!subject || !classname || !year || !section) {
-            return res.status(400).json({
-                error: "Missing required headers: subject, classname, year, or section.",
-            });
+            return res.status(400).json({ error: "Missing required headers." });
         }
 
-        // Fetch RO averages along with student count in each group (adjusted for 0-1 scale)
+        // Fetch RO averages along with student counts per score category
         const [roAverages] = await db.query(`
             SELECT 
                 ro.id AS ro_id, ro.name AS ro_name, 
-                AVG(rs.value) AS average_score,
-                SUM(CASE WHEN rs.value > 0.67 THEN 1 ELSE 0 END) AS above_0_67,
-                SUM(CASE WHEN rs.value BETWEEN 0.35 AND 0.67 THEN 1 ELSE 0 END) AS between_0_35_0_67,
-                SUM(CASE WHEN rs.value < 0.35 THEN 1 ELSE 0 END) AS below_0_35
-            FROM ro_scores rs
-            JOIN students_records sr ON rs.student = sr.id
-            JOIN report_outcomes ro ON rs.ro = ro.id
-            WHERE sr.year = ? AND sr.class = ? AND sr.section = ? 
-              AND ro.subject = ?
+                COALESCE(AVG(rs.value), NULL) AS average_score,
+                COALESCE(SUM(CASE WHEN rs.value > 0.67 THEN 1 ELSE 0 END), 0) AS above_0_67,
+                COALESCE(SUM(CASE WHEN rs.value BETWEEN 0.35 AND 0.67 THEN 1 ELSE 0 END), 0) AS between_0_35_0_67,
+                COALESCE(SUM(CASE WHEN rs.value < 0.35 THEN 1 ELSE 0 END), 0) AS below_0_35
+            FROM report_outcomes ro
+            LEFT JOIN ro_scores rs ON rs.ro = ro.id
+            LEFT JOIN students_records sr ON rs.student = sr.id
+            WHERE ro.subject = ? 
+              AND (sr.year = ? AND sr.class = ? AND sr.section = ? OR sr.id IS NULL)
             GROUP BY ro.id, ro.name
             ORDER BY ro.id;
-        `, [year, classname, section, subject]);
+        `, [subject, year, classname, section]);
 
-        if (roAverages.length === 0) {
-            return res.status(404).json({ error: "No RO scores found for the provided filters." });
-        }
-
-        // Fetch students grouped by score ranges, joining with the `students` table
+        // Fetch students grouped by score ranges
         const [students] = await db.query(`
-            SELECT 
-                rs.ro AS ro_id, 
-                sr.id AS student_record_id, 
-                s.id AS student_id, s.name AS student_name, 
-                rs.value AS score
+            SELECT rs.ro AS ro_id, s.id AS student_id, s.name AS student_name, rs.value AS score
             FROM ro_scores rs
             JOIN students_records sr ON rs.student = sr.id
             JOIN students s ON sr.student = s.id
-            JOIN report_outcomes ro ON rs.ro = ro.id
             WHERE sr.year = ? AND sr.class = ? AND sr.section = ? 
-              AND ro.subject = ?;
+              AND rs.ro IN (SELECT id FROM report_outcomes WHERE subject = ?);
         `, [year, classname, section, subject]);
 
-        // Organizing students into groups based on the 0-1 range
+        // Group students by their score range
         const studentGroups = {};
         students.forEach(student => {
             if (!studentGroups[student.ro_id]) {
                 studentGroups[student.ro_id] = { above_0_67: [], between_0_35_0_67: [], below_0_35: [] };
             }
             if (student.score > 0.67) {
-                studentGroups[student.ro_id].above_0_67.push({ id: student.student_id, name: student.student_name });
+                studentGroups[student.ro_id].above_0_67.push(student);
             } else if (student.score >= 0.35 && student.score <= 0.67) {
-                studentGroups[student.ro_id].between_0_35_0_67.push({ id: student.student_id, name: student.student_name });
+                studentGroups[student.ro_id].between_0_35_0_67.push(student);
             } else {
-                studentGroups[student.ro_id].below_0_35.push({ id: student.student_id, name: student.student_name });
+                studentGroups[student.ro_id].below_0_35.push(student);
             }
         });
 
-        // Merging student data into RO averages
+        // Format the final response
         const result = roAverages.map(row => ({
-            ro_id: row.ro_id,
-            ro_name: row.ro_name,
-            average_score: parseFloat(row.average_score),
+            average_score: row.average_score !== null ? parseFloat(row.average_score) : null,
             student_counts: {
+                ro_id: row.ro_id,
+                ro_name: row.ro_name,
                 above_0_67: row.above_0_67,
                 between_0_35_0_67: row.between_0_35_0_67,
                 below_0_35: row.below_0_35
@@ -249,5 +211,6 @@ const getClassAverageRO = async (req, res) => {
         res.status(500).json({ error: "Internal Server Error" });
     }
 };
+
 
 export { getClassAverageLO, getClassAverageRO, getClassAverageAC };

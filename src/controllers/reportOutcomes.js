@@ -3,14 +3,15 @@ import db from "../config/db.js";
 
 // GET Report Outcomes with their Learning Outcomes
 const getReportOutcomes = async (req, res) => {
-    const { year, subject } = req.headers;
+    const { year, subject, quarter, classname } = req.headers;
 
-    if (!year || !subject) {
-        return res.status(400).json({ message: "Missing required headers: year or subject" });
+    // Validate headers
+    if (!year || !subject || !quarter || !classname) {
+        return res.status(400).json({ message: "Missing required headers: year, subject, quarter, or classname" });
     }
 
     try {
-        // Fetch Report Outcomes
+        // Fetch Report Outcomes based on year and subject
         const roQuery = `
             SELECT id AS ro_id, name AS ro_name
             FROM report_outcomes
@@ -24,18 +25,24 @@ const getReportOutcomes = async (req, res) => {
 
         // Get list of RO IDs
         const roIds = reportOutcomes.map(ro => ro.ro_id);
-        
+
         let learningOutcomes = [];
         if (roIds.length > 0) {
             const placeholders = roIds.map(() => "?").join(", ");
             const loQuery = `
                 SELECT lom.ro, lo.id AS lo_id, lo.name AS lo_name, lom.priority, lom.weight
                 FROM ro_lo_mapping lom
-                LEFT JOIN learning_outcomes lo ON lom.lo= lo.id
+                LEFT JOIN learning_outcomes lo ON lom.lo = lo.id
                 WHERE lom.ro IN (${placeholders})
+                  AND lo.subject = ? 
+                  AND lo.year = ? 
+                  AND lo.quarter = ?
+                  AND lo.classname = ?
             `;
-            [learningOutcomes] = await db.execute(loQuery, [...roIds]);
+            [learningOutcomes] = await db.execute(loQuery, [...roIds, subject, year, quarter, classname]);
         }
+
+        // Map learning outcomes to their respective report outcomes
         const roWithLO = reportOutcomes.map(ro => ({
             ...ro,
             learning_outcomes: learningOutcomes
@@ -53,8 +60,6 @@ const getReportOutcomes = async (req, res) => {
         res.status(500).json({ message: "Internal server error" });
     }
 };
-
-
 
 // POST Report Outcome
 const addReportOutcome = async (req, res) => {
@@ -91,7 +96,7 @@ const addReportOutcome = async (req, res) => {
 
 
 // UPDATE Report Outcome
-const   updateReportOutcome = async (req, res) => {
+const updateReportOutcome = async (req, res) => {
     const { id } = req.query;
     const { name } = req.body;
 
@@ -153,4 +158,3 @@ const removeReportOutcome = async (req, res) => {
 
 
 export { getReportOutcomes, addReportOutcome, updateReportOutcome, removeReportOutcome};
-

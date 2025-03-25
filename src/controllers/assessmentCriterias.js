@@ -1,5 +1,7 @@
 import db from "../config/db.js";
 import { recalculateAcScores } from "./assessmentCriteriasScores.js";
+import { recalculateLOScore } from "./learningOutcomesMapping.js";
+import { recalculateROScore } from "./reportOutcomesMapping.js";
 // Get Assessment Criterias
 const getAssessmentCriterias = async (req, res) => {
     const { subject, year, quarter, classname } = req.headers;
@@ -169,34 +171,50 @@ const updateAssessmentCriteria = async (req, res) => {
         const updateQuery = `UPDATE assessment_criterias SET name = ?, max_marks = ? WHERE id = ?`;
         await connection.execute(updateQuery, [name, max_marks, id]);
 
-        // **4. Check if max_marks changed**
-        const maxMarksChanged = parseFloat(currentMaxMarks) !== parseFloat(max_marks);
+        // **4. Validate that all LO IDs exist in the learning_outcomes table**
+        const [validLOs] = await connection.query(
+            `SELECT id FROM learning_outcomes WHERE id IN (${lo_id.map(() => '?').join(',')}) 
+             AND year = ? AND quarter = ? AND class = ?`,
+            [...lo_id, year, quarter, classname]
+        );
+        
+        const validLOIds = validLOs.map(row => row.id);
 
-        // **5. Delete & Insert LO-AC Mapping (if changed)**
+        // **5. Check if all provided lo_id exist**
+        if (validLOIds.length !== lo_id.length) {
+            return res.status(400).json({
+                message: "One or more Learning Outcome IDs (lo_id) are invalid or do not belong to the correct year/class.",
+            });
+        }
+
+        // **6. Delete & Insert LO-AC Mapping (if changed)**
         if (loMappingChanged) {
             await connection.execute(`DELETE FROM lo_ac_mapping WHERE ac = ?`, [id]);
 
-            const insertMappingQuery = `INSERT INTO lo_ac_mapping (lo, ac, priority, weight) VALUES (?, ?, NULL, NULL)`;
-            for (const lo of lo_id) {
-                await connection.execute(insertMappingQuery, [lo, id]);
+            const insertMappingQuery = `INSERT INTO lo_ac_mapping (lo, ac, priority, weight) VALUES ?`;
+            const loAcValues = validLOIds.map(lo => [lo, id, null, null]);
+
+            if (loAcValues.length > 0) {
+                await connection.query(insertMappingQuery, [loAcValues]);
             }
 
-            // **6. Recalculate LO Scores**
-            for (const lo of lo_id) {
-                await recalculateLOWeightAndScore(connection, lo);
+            // **7. Recalculate LO Scores**
+            for (const lo of validLOIds) {
+                await recalculateLOScore(connection, lo);
             }
 
-            // **7. Recalculate RO Scores for affected ROs**
+            // **8. Recalculate RO Scores for affected ROs**
             const [affectedROs] = await connection.execute(
                 `SELECT DISTINCT ro FROM ro_lo_mapping WHERE lo IN (?)`,
-                [lo_id]
+                [validLOIds]
             );
             for (const ro of affectedROs.map(r => r.ro)) {
-                await recalculateROWeightAndScore(connection, ro);
+                await recalculateROScore(connection, ro);
             }
         }
 
-        // **8. Recalculate AC Scores if max_marks changed**
+        // **9. Recalculate AC Scores if max_marks changed**
+        const maxMarksChanged = parseFloat(currentMaxMarks) !== parseFloat(max_marks);
         if (maxMarksChanged) {
             await recalculateAcScores(id, year, quarter, classname, section);
         }
@@ -220,6 +238,7 @@ const updateAssessmentCriteria = async (req, res) => {
         connection.release();
     }
 };
+
 
 const removeAssessmentCriteria = async (req, res) => {
     const { id } = req.query; // Get ID from request params
