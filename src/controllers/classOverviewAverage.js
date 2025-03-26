@@ -56,7 +56,7 @@ const getClassAverageAC = async (req, res) => {
         const result = acAverages.map(row => ({
             ac_id: row.ac_id,
             ac_name: row.ac_name,
-            average_score: row.average_score !== null ? parseFloat(row.average_score) : null,
+            average_score: row.average_score !== null ? parseFloat(row.average_score) : 0,
             student_counts: {
                 above_0_67: row.above_0_67,
                 between_0_35_0_67: row.between_0_35_0_67,
