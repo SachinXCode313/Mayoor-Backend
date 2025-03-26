@@ -37,7 +37,7 @@ const getReportOutcomes = async (req, res) => {
                   AND lo.subject = ? 
                   AND lo.year = ? 
                   AND lo.quarter = ?
-                  AND lo.classname = ?
+                  AND lo.class = ?
             `;
             [learningOutcomes] = await db.execute(loQuery, [...roIds, subject, year, quarter, classname]);
         }
