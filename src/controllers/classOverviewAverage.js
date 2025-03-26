@@ -126,7 +126,7 @@ const getClassAverageLO = async (req, res) => {
         const result = loAverages.map(row => ({
             lo_id: row.lo_id,
             lo_name: row.lo_name,
-            average_score: row.average_score !== null ? parseFloat(row.average_score) : null,
+            average_score: row.average_score !== null ? parseFloat(row.average_score) : 0,
             student_counts: {
                 above_0_67: row.above_0_67,
                 between_0_35_0_67: row.between_0_35_0_67,
@@ -194,7 +194,7 @@ const getClassAverageRO = async (req, res) => {
 
         // Format the final response
         const result = roAverages.map(row => ({
-            average_score: row.average_score !== null ? parseFloat(row.average_score) : null,
+            average_score: row.average_score !== null ? parseFloat(row.average_score) : 0,
             student_counts: {
                 ro_id: row.ro_id,
                 ro_name: row.ro_name,
