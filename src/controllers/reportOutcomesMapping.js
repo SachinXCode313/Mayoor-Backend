@@ -2,15 +2,20 @@ import db from "../config/db.js";
 
 const recalculateROScore = async (connection, ro_id) => {
     try {
+        const warnings = []; // Store warnings
+
         // Priority values
         const priorityValues = { h: 0.5, m: 0.3, l: 0.2 };
 
         // Fetch all students linked to the given RO
         const [studentRows] = await connection.query(
-            "SELECT student FROM lo_scores WHERE lo IN (SELECT lo FROM ro_lo_mapping WHERE ro = ?)",
+            "SELECT DISTINCT student FROM lo_scores WHERE lo IN (SELECT lo FROM ro_lo_mapping WHERE ro = ?)",
             [ro_id]
         );
-        if (studentRows.length === 0) return;
+        if (studentRows.length === 0) {
+            warnings.push(`No students found for RO ${ro_id}.`);
+            return warnings;
+        }
 
         const studentIds = studentRows.map(row => row.student);
 
@@ -19,7 +24,10 @@ const recalculateROScore = async (connection, ro_id) => {
             "SELECT lo, priority FROM ro_lo_mapping WHERE ro = ?",
             [ro_id]
         );
-        if (mappings.length === 0) return;
+        if (mappings.length === 0) {
+            warnings.push(`No LO mappings found for RO ${ro_id}.`);
+            return warnings;
+        }
 
         // Calculate weight for each priority
         let hCount = 0, mCount = 0, lCount = 0;
@@ -30,44 +38,59 @@ const recalculateROScore = async (connection, ro_id) => {
         });
 
         const totalWeight = (hCount * priorityValues.h) + (mCount * priorityValues.m) + (lCount * priorityValues.l);
-        if (totalWeight === 0) return; // Avoid division by zero
+        if (totalWeight === 0) {
+            warnings.push(`Invalid weight calculation for RO ${ro_id} (total weight is zero).`);
+            return warnings;
+        }
 
-        const hWeight = (priorityValues.h * hCount) / totalWeight;
-        const mWeight = (priorityValues.m * mCount) / totalWeight;
-        const lWeight = (priorityValues.l * lCount) / totalWeight;
+        const hWeight = priorityValues.h / totalWeight;
+        const mWeight = priorityValues.m / totalWeight;
+        const lWeight = priorityValues.l / totalWeight;
 
-        // Recalculate RO Scores for each student
+        // Update the weight in the ro_lo_mapping table
         for (const { lo, priority } of mappings) {
-            let weight = 0;
-            if (priority === 'h') weight = hWeight;
-            else if (priority === 'm') weight = mWeight;
-            else if (priority === 'l') weight = lWeight;
-            // Update the weight in the ro_lo_mapping table
+            let weight = priority === 'h' ? hWeight :
+                         priority === 'm' ? mWeight :
+                         priority === 'l' ? lWeight : 0;
+
             await connection.query(
                 "UPDATE ro_lo_mapping SET weight = ? WHERE ro = ? AND lo = ?",
-                [weight, ro_id, lo]);}
+                [weight, ro_id, lo]
+            );
+        }
+
+        // Recalculate RO Scores for each student
         for (const student_id of studentIds) {
             let weightedSum = 0;
+            let validLOs = 0;
 
             for (const { lo, priority } of mappings) {
-                let weight = 0;
-                if (priority === 'h') weight = hWeight;
-                else if (priority === 'm') weight = mWeight;
-                else if (priority === 'l') weight = lWeight;
+                let weight = priority === 'h' ? hWeight :
+                             priority === 'm' ? mWeight :
+                             priority === 'l' ? lWeight : 0;
 
                 // Fetch the LO score for the student
                 const [loScoreRows] = await connection.query(
                     "SELECT value FROM lo_scores WHERE lo = ? AND student = ?",
                     [lo, student_id]
                 );
+
                 if (loScoreRows.length > 0) {
                     const loScore = loScoreRows[0].value || 0;
                     weightedSum += loScore * weight;
+                    validLOs++;
+                } else {
+                    warnings.push(`No LO score found for student ${student_id} and LO ${lo}.`);
                 }
             }
 
+            if (validLOs === 0) {
+                warnings.push(`Skipping RO score insert for student ${student_id} due to no valid LO scores.`);
+                continue;
+            }
+
             // Calculate RO score
-            const roScore = weightedSum/mappings.length;
+            const roScore = weightedSum / validLOs;
 
             // Insert or update RO Score
             await connection.query(
@@ -75,10 +98,14 @@ const recalculateROScore = async (connection, ro_id) => {
                 [ro_id, student_id, roScore, roScore]
             );
         }
+
+        return warnings;
     } catch (error) {
         console.error("Error recalculating RO score:", error);
+        return [`Error recalculating RO score: ${error.message}`];
     }
 };
+
 
 // **Main Function: Update Report Outcome Mapping**
 const updateReportOutcomeMapping = async (req, res) => {
@@ -87,6 +114,8 @@ const updateReportOutcomeMapping = async (req, res) => {
 
     try {
         console.log("Starting updateReportOutcomeMapping...");
+        const warnings = []; // Collect warnings
+
         const { ro_id } = req.query;
         const { data } = req.body;
 
@@ -107,8 +136,7 @@ const updateReportOutcomeMapping = async (req, res) => {
         for (const item of data) {
             if (!validPriorities.includes(item.priority)) {
                 return res.status(400).json({
-                    error: `Invalid priority '${item.priority}'. Must be one of ${validPriorities.join(", ")}.`,
-                });
+                    error: `Invalid priority '${item.priority}'. Must be one of ${validPriorities.join(", ")}.` });
             }
         }
 
@@ -133,6 +161,15 @@ const updateReportOutcomeMapping = async (req, res) => {
         // **Handle New Mappings & Updates**
         for (const { lo_id, priority } of data) {
             const weight = priorityValues[priority];
+
+            // Validate if LO exists before inserting
+            const [loExists] = await connection.query(
+                "SELECT id FROM learning_outcomes WHERE id = ?", [lo_id]
+            );
+            if (loExists.length === 0) {
+                warnings.push(`LO ${lo_id} does not exist in learning_outcomes.`);
+                continue; // Skip this LO if it doesn't exist
+            }
 
             // If the mapping doesn't exist, insert it
             if (!existingMappingMap.has(lo_id)) {
@@ -160,21 +197,23 @@ const updateReportOutcomeMapping = async (req, res) => {
                     [ro_id, lo_id]
                 );
                 mappingChanged = true;
+                warnings.push(`Mapping for LO ${lo_id} deleted.`);
             }
         }
 
         // **Recalculate RO Scores if Mapping Changed**
+        let recalculationWarnings = [];
         if (mappingChanged) {
-            await recalculateROScore(connection, ro_id); // Call the recalculation function
+            recalculationWarnings = await recalculateROScore(connection, ro_id);
             console.log("RO scores recalculated successfully.");
         }
 
         await connection.commit();
         res.status(200).json({
-            message: `RO mappings updated successfully. ${
-                mappingChanged ? "Scores recalculated." : "No changes detected."
-            }`,
+            message: `RO mappings updated successfully. ${mappingChanged ? "Scores recalculated." : "No changes detected."}`,
+            warnings: [...warnings, ...recalculationWarnings]
         });
+
     } catch (error) {
         await connection.rollback();
         console.error("Error updating RO mappings:", error.message);
@@ -183,6 +222,7 @@ const updateReportOutcomeMapping = async (req, res) => {
         connection.release();
     }
 };
+
 
 
 const getReportOutcomesMapping = async (req, res) => {

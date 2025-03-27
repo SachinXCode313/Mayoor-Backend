@@ -2,7 +2,7 @@ import db from "../config/db.js";
 
 const getMappingTree = async (req, res) => {
     try {
-        const { subject,year } = req.header;
+        const { subject,year } = req.headers;
         if (!subject) {
             return res.status(400).json({ error: "subject is required" });
         }
