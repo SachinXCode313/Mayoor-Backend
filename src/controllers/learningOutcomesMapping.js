@@ -104,7 +104,7 @@ const recalculateLOScore = async (connection, lo_id, studentIds) => {
             }
 
             // Calculate LO score
-            const loScore = weightedSum / mappings.length;
+            const loScore = weightedSum;
 
             // Insert or update LO Score
             await connection.query(

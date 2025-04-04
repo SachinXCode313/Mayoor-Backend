@@ -90,7 +90,7 @@ const recalculateROScore = async (connection, ro_id) => {
             }
 
             // Calculate RO score
-            const roScore = weightedSum / validLOs;
+            const roScore = weightedSum;
 
             // Insert or update RO Score
             await connection.query(

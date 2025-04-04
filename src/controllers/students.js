@@ -1,7 +1,7 @@
 import db from "../config/db.js";
 
 // Get students
-const getStudents =  async (req, res) => {
+const getStudents = async (req, res) => {
     const year = req.headers['year'];
     const className = req.headers['classname'];
     const section = req.headers['section'];
@@ -32,16 +32,17 @@ const getStudents =  async (req, res) => {
     try {
         // SQL query to get students' details along with their record information
         const query = `
-            SELECT 
-                s.id, 
-                s.name, 
-                sc.year, 
-                sc.section, 
-                sc.class 
-            FROM students s 
-            JOIN students_records sc ON s.id = sc.student 
-            WHERE sc.year = ? AND sc.class = ? AND sc.section = ?
-        `;
+        SELECT 
+            s.id, 
+            s.name, 
+            sc.year, 
+            sc.section, 
+            sc.class 
+        FROM students s 
+        JOIN students_records sc ON s.id = sc.student 
+        WHERE sc.year = ? AND sc.class = ? AND sc.section = ?
+        ORDER BY s.id ASC
+    `;
         // Execute query with the year, classname, and section as parameters
         const [results] = await db.execute(query, [year, className, section]);
         // If no results found, return 404 error
@@ -154,4 +155,4 @@ const updateStudentStatus = async (req, res) => {
     }
 };
 
-export {updateStudentStatus, createStudent, getStudents};
+export { updateStudentStatus, createStudent, getStudents };
