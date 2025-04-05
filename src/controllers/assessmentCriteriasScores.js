@@ -44,7 +44,7 @@ const setAssessmentCriteriaScore = async (req, res) => {
         let { ac_id, scores } = req.body;
 
         // Convert NaN values to NULL
-        scores = scores.map(score => isNaN(score) ? null : score);
+        scores = scores.map(score => isNaN(score.obtained_marks) ? null : score);
 
         const result = await recalculateAcScores(ac_id, year, quarter, classname, section, scores);
         if (result.success) {
