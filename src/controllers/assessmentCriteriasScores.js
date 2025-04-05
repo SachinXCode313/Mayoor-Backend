@@ -41,7 +41,10 @@ const getAssessmentCriteriaScores = async (req, res) => {
 const setAssessmentCriteriaScore = async (req, res) => {
     try {
         const { year, quarter, classname, section } = req.headers;
-        const { ac_id, scores } = req.body;
+        let { ac_id, scores } = req.body;
+
+        // Convert NaN values to NULL
+        scores = scores.map(score => isNaN(score) ? null : score);
 
         const result = await recalculateAcScores(ac_id, year, quarter, classname, section, scores);
         if (result.success) {
@@ -54,11 +57,13 @@ const setAssessmentCriteriaScore = async (req, res) => {
     }
 };
 
-// Update Assessment Criteria Scores (PUT)
 const updateAssessmentCriteriaScore = async (req, res) => {
     try {
         const { year, quarter, classname, section } = req.headers;
-        const { ac_id, scores } = req.body;
+        let { ac_id, scores } = req.body;
+
+        // Convert NaN values to NULL
+        scores = scores.map(score => isNaN(score) ? null : score);
 
         const result = await recalculateAcScores(ac_id, year, quarter, classname, section, scores);
         if (result.success) {
@@ -70,6 +75,7 @@ const updateAssessmentCriteriaScore = async (req, res) => {
         res.status(500).json({ error: "Internal Server Error" });
     }
 };
+
 const recalculateAcScores = async (ac_id, year, quarter, classname, section, scores) => {
     const connection = await db.getConnection();
     await connection.beginTransaction();

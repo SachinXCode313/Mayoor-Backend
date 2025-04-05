@@ -16,11 +16,14 @@ const getAssessmentCriterias = async (req, res) => {
     }
 
     try {
-        // Fetch Assessment Criterias
+        // Fetch Assessment Criterias with Average Score
         const acQuery = `
-            SELECT id AS ac_id, name AS ac_name, max_marks
-            FROM assessment_criterias
-            WHERE subject = ? AND year = ? AND quarter = ? AND class = ?
+            SELECT ac.id AS ac_id, ac.name AS ac_name, ac.max_marks,
+                   COALESCE(AVG(ascore.value), NULL) AS average_score  -- NULL if no scores
+            FROM assessment_criterias ac
+            LEFT JOIN ac_scores ascore ON ac.id = ascore.ac
+            WHERE ac.subject = ? AND ac.year = ? AND ac.quarter = ? AND ac.class = ?
+            GROUP BY ac.id, ac.name, ac.max_marks
         `;
         const [assessmentCriterias] = await db.execute(acQuery, [subject, year, quarter, classname]);
 
@@ -48,6 +51,7 @@ const getAssessmentCriterias = async (req, res) => {
         // Map LOs to corresponding ACs
         const acWithLO = assessmentCriterias.map(ac => ({
             ...ac,
+            average_score: ac.average_score ? parseFloat(ac.average_score) : null, // Convert to float, handle null
             learning_outcomes: learningOutcomes
                 .filter(lo => lo.ac === ac.ac_id)
                 .map(lo => ({
@@ -66,6 +70,7 @@ const getAssessmentCriterias = async (req, res) => {
         });
     }
 };
+
 
 
 // Add Assessment Criteria

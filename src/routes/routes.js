@@ -16,11 +16,13 @@ import {verifyToken,verifyUser} from "../controllers/userVerfication.js";
 import getStudentReport from "../controllers/studentReport.js";
 import getMappingTree from "../controllers/mappingTree.js";
 import { getACReport, getLOReport, getROReport } from "../controllers/downloadReportCard.js";
+import getTeacherDashboard from "../controllers/teacherDashboard.js";
 
 const routers = express.Router();
 
 routers.get('/students',getStudents)
 routers.get("/teachers", getTeachers)
+routers.get("/teacher-dashboard", getTeacherDashboard)
 routers.get('/assessment-criteria',getAssessmentCriterias)
 routers.get('/learning-outcome',getLearningOutcomes)
 routers.get('/report-outcome',getReportOutcomes)

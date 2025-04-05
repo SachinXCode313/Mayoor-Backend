@@ -28,10 +28,7 @@ const getClassAverageAC = async (req, res) => {
         const [acAverages] = await db.query(`
             SELECT 
                 ac.id AS ac_id, ac.name AS ac_name, 
-                COALESCE(AVG(ascr.value), NULL) AS average_score,
-                COALESCE(SUM(CASE WHEN ascr.value > 0.67 THEN 1 ELSE 0 END), 0) AS above_0_67,
-                COALESCE(SUM(CASE WHEN ascr.value BETWEEN 0.35 AND 0.67 THEN 1 ELSE 0 END), 0) AS between_0_35_0_67,
-                COALESCE(SUM(CASE WHEN ascr.value < 0.35 THEN 1 ELSE 0 END), 0) AS below_0_35
+                COALESCE(AVG(ascr.value), NULL) AS average_score
             FROM assessment_criterias ac
             LEFT JOIN ac_scores ascr ON ascr.ac = ac.id
             LEFT JOIN students_records sr ON ascr.student = sr.id
@@ -50,38 +47,53 @@ const getClassAverageAC = async (req, res) => {
               AND ascr.ac IN (?)
         `, [year, classname, section, acIds]);
 
-        // Group students by AC and score range
+        // Group students by AC
         const studentGroups = {};
         students.forEach(({ ac_id, student_id, student_name, score }) => {
             if (!studentGroups[ac_id]) {
-                studentGroups[ac_id] = { above_0_67: [], between_0_35_0_67: [], below_0_35: [] };
+                studentGroups[ac_id] = [];
             }
-            const studentObj = { student_id, student_name, score: score };
-            if (score > 0.67) {
-                studentGroups[ac_id].above_0_67.push(studentObj);
-            } else if (score >= 0.35 && score <= 0.67) {
-                studentGroups[ac_id].between_0_35_0_67.push(studentObj);
-            } else {
-                studentGroups[ac_id].below_0_35.push(studentObj);
-            }
+            studentGroups[ac_id].push({
+                student_id,
+                student_name,
+                score: score !== null ? parseFloat(score) : null
+            });
         });
 
-        // Format the final AC-wise response
-        const result = acAverages.map(row => ({
-            ac_id: row.ac_id,
-            ac_name: row.ac_name,
-            average_score: row.average_score !== null ? parseFloat(row.average_score) : null,
-            student_counts: {
-                above_0_67: row.above_0_67,
-                between_0_35_0_67: row.between_0_35_0_67,
-                below_0_35: row.below_0_35
-            },
-            students: studentGroups[row.ac_id] || {
-                above_0_67: [], between_0_35_0_67: [], below_0_35: []
-            }
-        }));
+        // Format AC-wise response
+        const result = acAverages.map(row => {
+            const acStudents = studentGroups[row.ac_id] || [];
 
-        // Compute student average across all ACs
+            // Count students in each range using fixed thresholds for display only
+            const counts = { above_0_67: 0, between_0_35_0_67: 0, below_0_35: 0 };
+            const grouped = { above_0_67: [], between_0_35_0_67: [], below_0_35: [] };
+
+            acStudents.forEach(({ student_id, student_name, score }) => {
+                if (score === null) return;
+                const obj = { student_id, student_name, score };
+
+                if (score > 0.67) {
+                    counts.above_0_67++;
+                    grouped.above_0_67.push(obj);
+                } else if (score >= 0.35) {
+                    counts.between_0_35_0_67++;
+                    grouped.between_0_35_0_67.push(obj);
+                } else {
+                    counts.below_0_35++;
+                    grouped.below_0_35.push(obj);
+                }
+            });
+
+            return {
+                ac_id: row.ac_id,
+                ac_name: row.ac_name,
+                average_score: row.average_score !== null ? parseFloat(row.average_score) : null,
+                student_counts: counts,
+                students: grouped
+            };
+        });
+
+        // Compute per-student average across all ACs
         const studentScoreMap = {};
         students.forEach(({ student_id, student_name, score }) => {
             if (!studentScoreMap[student_id]) {
@@ -110,28 +122,32 @@ const getClassAverageAC = async (req, res) => {
             ? validStudentAverages.reduce((sum, s) => sum + s.average, 0) / validStudentAverages.length
             : null;
 
-        // Group students based on class average
+        // Use dynamic bounds: average ± 0.07
+        const lowerBound = overallClassAverage !== null ? overallClassAverage - 0.07 : null;
+        const upperBound = overallClassAverage !== null ? overallClassAverage + 0.07 : null;
+
+        // Classify students based on dynamic range
         const distribution = {
             above_average: [],
             average: [],
             below_average: []
         };
 
-        studentAverages.forEach(student => {
-            const { student_id, student_name, average } = student;
-            if (average === null || overallClassAverage === null) {
+        studentAverages.forEach(({ student_id, student_name, average }) => {
+            if (average === null || lowerBound === null || upperBound === null) {
                 distribution.average.push({ student_id, student_name, average: null, score: null });
-            } else if (average > overallClassAverage) {
-                distribution.above_average.push({ student_id, student_name, average, score: average });
-            } else if (average < overallClassAverage) {
+            } else if (average < lowerBound) {
                 distribution.below_average.push({ student_id, student_name, average, score: average });
+            } else if (average > upperBound) {
+                distribution.above_average.push({ student_id, student_name, average, score: average });
             } else {
                 distribution.average.push({ student_id, student_name, average, score: average });
             }
         });
 
+        // Final response
         res.status(200).json({
-            overall_class_average: overallClassAverage !== null ? parseFloat(overallClassAverage) : null,
+            overall_class_average: overallClassAverage !== null ? parseFloat(overallClassAverage.toFixed(3)) : null,
             overall_distribution: distribution,
             class_ac_averages: result
         });
@@ -141,6 +157,7 @@ const getClassAverageAC = async (req, res) => {
         res.status(500).json({ error: "Internal Server Error" });
     }
 };
+
 
 const getClassAverageLO = async (req, res) => {
     try {
@@ -153,10 +170,7 @@ const getClassAverageLO = async (req, res) => {
         const [loAverages] = await db.query(`
             SELECT 
                 lo.id AS lo_id, lo.name AS lo_name,
-                COALESCE(AVG(los.value), NULL) AS average_score,
-                COALESCE(SUM(CASE WHEN los.value > 0.67 THEN 1 ELSE 0 END), 0) AS above_0_67,
-                COALESCE(SUM(CASE WHEN los.value BETWEEN 0.35 AND 0.67 THEN 1 ELSE 0 END), 0) AS between_0_35_0_67,
-                COALESCE(SUM(CASE WHEN los.value < 0.35 THEN 1 ELSE 0 END), 0) AS below_0_35
+                COALESCE(AVG(los.value), NULL) AS average_score
             FROM learning_outcomes lo
             LEFT JOIN lo_scores los ON los.lo = lo.id
             LEFT JOIN students_records sr ON los.student = sr.id
@@ -175,6 +189,7 @@ const getClassAverageLO = async (req, res) => {
               AND los.lo IN (SELECT id FROM learning_outcomes WHERE subject = ? AND quarter = ?);
         `, [year, classname, section, subject, quarter]);
 
+        // Group students by LO
         const studentGroups = {};
         students.forEach(({ lo_id, student_id, student_name, score }) => {
             if (!studentGroups[lo_id]) {
@@ -190,30 +205,42 @@ const getClassAverageLO = async (req, res) => {
             }
         });
 
+        // Format LO-wise response
         const result = loAverages.map(row => ({
             lo_id: row.lo_id,
             lo_name: row.lo_name,
             average_score: row.average_score !== null ? parseFloat(row.average_score) : null,
-            student_counts: {
-                above_0_67: row.above_0_67,
-                between_0_35_0_67: row.between_0_35_0_67,
-                below_0_35: row.below_0_35
-            },
-            students: studentGroups[row.lo_id] || { above_0_67: [], between_0_35_0_67: [], below_0_35: [] }
+            students: studentGroups[row.lo_id] || {
+                above_0_67: [], between_0_35_0_67: [], below_0_35: []
+            }
         }));
 
-        const allScores = students.map(s => parseFloat(s.score)).filter(Boolean);
-        const overall_class_average = allScores.length > 0
-            ? parseFloat((allScores.reduce((a, b) => a + b, 0) / allScores.length).toFixed(4))
-            : null;
-
+        // Compute per-student averages
         const studentMap = {};
         students.forEach(({ student_id, student_name, score }) => {
             if (!studentMap[student_id]) {
                 studentMap[student_id] = { student_id, student_name, scores: [] };
             }
-            if (score !== null) studentMap[student_id].scores.push(parseFloat(score));
+            if (score !== null) {
+                studentMap[student_id].scores.push(parseFloat(score));
+            }
         });
+
+        const validStudentAverages = [];
+        Object.values(studentMap).forEach(({ student_id, student_name, scores }) => {
+            if (scores.length > 0) {
+                const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
+                validStudentAverages.push({ student_id, student_name, average: avg });
+            }
+        });
+
+        const overall_class_average =
+            validStudentAverages.length > 0
+                ? parseFloat((validStudentAverages.reduce((sum, s) => sum + s.average, 0) / validStudentAverages.length).toFixed(4))
+                : null;
+
+        const lowerBound = overall_class_average !== null ? overall_class_average - 0.07 : null;
+        const upperBound = overall_class_average !== null ? overall_class_average + 0.07 : null;
 
         const distribution = {
             above_average: [],
@@ -221,18 +248,17 @@ const getClassAverageLO = async (req, res) => {
             below_average: []
         };
 
-        Object.values(studentMap).forEach(({ student_id, student_name, scores }) => {
-            const avg = scores.length > 0
-                ? parseFloat((scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(4))
-                : null;
+        validStudentAverages.forEach(({ student_id, student_name, average }) => {
+            const studentEntry = {
+                student_id,
+                student_name,
+                average: parseFloat(average.toFixed(4)),
+                score: parseFloat(average.toFixed(4))
+            };
 
-            const studentEntry = { student_id, student_name, average: avg, score: avg };
-
-            if (avg === null) {
-                distribution.average.push(studentEntry);
-            } else if (avg > overall_class_average) {
+            if (average > upperBound) {
                 distribution.above_average.push(studentEntry);
-            } else if (avg < overall_class_average) {
+            } else if (average < lowerBound) {
                 distribution.below_average.push(studentEntry);
             } else {
                 distribution.average.push(studentEntry);
@@ -250,8 +276,6 @@ const getClassAverageLO = async (req, res) => {
         res.status(500).json({ error: "Internal Server Error" });
     }
 };
-
-
 const getClassAverageRO = async (req, res) => {
     try {
         const { subject, classname, year, quarter, section } = req.headers;
@@ -263,10 +287,7 @@ const getClassAverageRO = async (req, res) => {
         const [roAverages] = await db.query(`
             SELECT 
                 ro.id AS ro_id, ro.name AS ro_name,
-                COALESCE(AVG(ros.value), NULL) AS average_score,
-                COALESCE(SUM(CASE WHEN ros.value > 0.67 THEN 1 ELSE 0 END), 0) AS above_0_67,
-                COALESCE(SUM(CASE WHEN ros.value BETWEEN 0.35 AND 0.67 THEN 1 ELSE 0 END), 0) AS between_0_35_0_67,
-                COALESCE(SUM(CASE WHEN ros.value < 0.35 THEN 1 ELSE 0 END), 0) AS below_0_35
+                COALESCE(AVG(ros.value), NULL) AS average_score
             FROM report_outcomes ro
             LEFT JOIN ro_scores ros ON ros.ro = ro.id
             LEFT JOIN students_records sr ON ros.student = sr.id
@@ -281,10 +302,11 @@ const getClassAverageRO = async (req, res) => {
             FROM ro_scores ros
             JOIN students_records sr ON ros.student = sr.id
             JOIN students s ON sr.student = s.id
-            WHERE sr.year = ? AND sr.class = ? AND sr.section = ? 
+            WHERE sr.year = ? AND sr.class = ? AND sr.section = ?
               AND ros.ro IN (SELECT id FROM report_outcomes WHERE subject = ? AND quarter = ?);
         `, [year, classname, section, subject, quarter]);
 
+        // Group students per RO
         const studentGroups = {};
         students.forEach(({ ro_id, student_id, student_name, score }) => {
             if (!studentGroups[ro_id]) {
@@ -300,30 +322,42 @@ const getClassAverageRO = async (req, res) => {
             }
         });
 
+        // Structure final RO response
         const result = roAverages.map(row => ({
             ro_id: row.ro_id,
             ro_name: row.ro_name,
             average_score: row.average_score !== null ? parseFloat(row.average_score) : null,
-            student_counts: {
-                above_0_67: row.above_0_67,
-                between_0_35_0_67: row.between_0_35_0_67,
-                below_0_35: row.below_0_35
-            },
-            students: studentGroups[row.ro_id] || { above_0_67: [], between_0_35_0_67: [], below_0_35: [] }
+            students: studentGroups[row.ro_id] || {
+                above_0_67: [], between_0_35_0_67: [], below_0_35: []
+            }
         }));
 
-        const allScores = students.map(s => parseFloat(s.score)).filter(Boolean);
-        const overall_class_average = allScores.length > 0
-            ? parseFloat((allScores.reduce((a, b) => a + b, 0) / allScores.length).toFixed(4))
-            : null;
-
+        // Compute per-student averages
         const studentMap = {};
         students.forEach(({ student_id, student_name, score }) => {
             if (!studentMap[student_id]) {
                 studentMap[student_id] = { student_id, student_name, scores: [] };
             }
-            if (score !== null) studentMap[student_id].scores.push(parseFloat(score));
+            if (score !== null) {
+                studentMap[student_id].scores.push(parseFloat(score));
+            }
         });
+
+        const validStudentAverages = [];
+        Object.values(studentMap).forEach(({ student_id, student_name, scores }) => {
+            if (scores.length > 0) {
+                const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
+                validStudentAverages.push({ student_id, student_name, average: avg });
+            }
+        });
+
+        const overall_class_average =
+            validStudentAverages.length > 0
+                ? parseFloat((validStudentAverages.reduce((sum, s) => sum + s.average, 0) / validStudentAverages.length).toFixed(4))
+                : null;
+
+        const lowerBound = overall_class_average !== null ? overall_class_average - 0.07 : null;
+        const upperBound = overall_class_average !== null ? overall_class_average + 0.07 : null;
 
         const distribution = {
             above_average: [],
@@ -331,18 +365,17 @@ const getClassAverageRO = async (req, res) => {
             below_average: []
         };
 
-        Object.values(studentMap).forEach(({ student_id, student_name, scores }) => {
-            const avg = scores.length > 0
-                ? parseFloat((scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(4))
-                : null;
+        validStudentAverages.forEach(({ student_id, student_name, average }) => {
+            const studentEntry = {
+                student_id,
+                student_name,
+                average: parseFloat(average.toFixed(4)),
+                score: parseFloat(average.toFixed(4))
+            };
 
-            const studentEntry = { student_id, student_name, average: avg, score: avg };
-
-            if (avg === null) {
-                distribution.average.push(studentEntry);
-            } else if (avg > overall_class_average) {
+            if (average > upperBound) {
                 distribution.above_average.push(studentEntry);
-            } else if (avg < overall_class_average) {
+            } else if (average < lowerBound) {
                 distribution.below_average.push(studentEntry);
             } else {
                 distribution.average.push(studentEntry);
@@ -360,4 +393,5 @@ const getClassAverageRO = async (req, res) => {
         res.status(500).json({ error: "Internal Server Error" });
     }
 };
+
 export { getClassAverageLO, getClassAverageRO, getClassAverageAC };
