@@ -29,20 +29,49 @@ const verifyUser = (req, res) => {
     return res.status(400).json({ error: "Email is required" });
   }
 
-  const query = "SELECT role FROM teachers WHERE email = ?";
+  const roleQuery = "SELECT id, role FROM teachers WHERE email = ?";
 
-  db.query(query, [email], (err, results) => {
-    if (err) {
-      return res.status(500).json({ error: "Database query failed" });
-    }
+  db.query(roleQuery, [email], (err, results) => {
+    if (err) return res.status(500).json({ error: "Database query failed" });
 
     if (results.length === 0) {
       return res.status(404).json({ error: "User not found" });
     }
 
-    return res.json({ role });
+    const teacherId = results[0].id;
+    const role = results[0].role;
+
+    if (role !== "teacher") {
+      return res.json({ role }); // just send the role for non-teachers
+    }
+
+    const allocationQuery = `
+      SELECT 
+        classes.name AS class_name, 
+        sections.name AS section_name, 
+        subjects.name AS subject_name
+      FROM teacher_allocation
+      JOIN classes ON teacher_allocation.class = classes.id
+      JOIN sections ON teacher_allocation.section = sections.id
+      JOIN subjects ON teacher_allocation.subject = subjects.id
+      WHERE teacher_allocation.teacher = ?
+    `;
+
+    db.query(allocationQuery, [teacherId], (err, allocations) => {
+      if (err) return res.status(500).json({ error: "Failed to fetch allocations" });
+
+      return res.json({
+        role,
+        allocations: allocations.map(a => ({
+          class: a.class_name,
+          section: a.section_name,
+          subject: a.subject_name
+        }))
+      });
+    });
   });
-}
+};
+
 
 export {verifyToken,verifyUser};
 

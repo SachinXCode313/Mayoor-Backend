@@ -2,6 +2,7 @@ import db from "../config/db.js";
 import { recalculateAcScores } from "./assessmentCriteriasScores.js";
 import { recalculateLOScore } from "./learningOutcomesMapping.js";
 import { recalculateROScore } from "./reportOutcomesMapping.js";
+
 // Get Assessment Criterias
 const getAssessmentCriterias = async (req, res) => {
     const { subject, year, quarter, classname } = req.headers;
