@@ -1,7 +1,7 @@
 import { adminAuth } from "../config/firebase.js";
 import db from "../config/db.js";
 
-const verifyToken = async (req, res) => {
+const verifyUser = async (req, res) => {
   const { token } = req.body;
 
   if (!token) {
@@ -9,69 +9,69 @@ const verifyToken = async (req, res) => {
   }
 
   try {
+    // Step 1: Verify Firebase Token
     const decodedToken = await adminAuth.verifyIdToken(token);
-    console.log("User verified and authorized.");
-    res.status(200).send({
-      success: true,
-      message: "User verified",
-      user: decodedToken,
-    });
-  } catch (error) {
-    console.error("Error verifying token:", error);
-    res.status(401).send({ success: false, message: "Unauthorized" });
-  }
-};
+    const email = decodedToken.email;
 
-const verifyUser = (req, res) => {
-  const { email } = req.query;
-
-  if (!email) {
-    return res.status(400).json({ error: "Email is required" });
-  }
-
-  const roleQuery = "SELECT id, role FROM teachers WHERE email = ?";
-
-  db.query(roleQuery, [email], (err, results) => {
-    if (err) return res.status(500).json({ error: "Database query failed" });
-
-    if (results.length === 0) {
-      return res.status(404).json({ error: "User not found" });
+    if (!email) {
+      return res.status(400).json({ error: "Email not found in token." });
     }
 
-    const teacherId = results[0].id;
-    const role = results[0].role;
+    // Step 2: Fetch Role and ID from DB
+    const roleQuery = "SELECT id, role FROM teachers WHERE email = ?";
+    db.query(roleQuery, [email], (err, results) => {
+      if (err) return res.status(500).json({ error: "Database query failed" });
 
-    if (role !== "teacher") {
-      return res.json({ role }); // just send the role for non-teachers
-    }
+      if (results.length === 0) {
+        return res.status(404).json({ error: "User not found" });
+      }
 
-    const allocationQuery = `
-      SELECT 
-        classes.name AS class_name, 
-        sections.name AS section_name, 
-        subjects.name AS subject_name
-      FROM teacher_allocation
-      JOIN classes ON teacher_allocation.class = classes.id
-      JOIN sections ON teacher_allocation.section = sections.id
-      JOIN subjects ON teacher_allocation.subject = subjects.id
-      WHERE teacher_allocation.teacher = ?
-    `;
+      const teacherId = results[0].id;
+      const role = results[0].role;
 
-    db.query(allocationQuery, [teacherId], (err, allocations) => {
-      if (err) return res.status(500).json({ error: "Failed to fetch allocations" });
+      // Step 3: If not teacher, return role only
+      if (role !== "teacher") {
+        return res.status(200).json({
+          success: true,
+          message: "User verified",
+          role,
+          user: decodedToken,
+        });
+      }
 
-      return res.json({
-        role,
-        allocations: allocations.map(a => ({
-          class: a.class_name,
-          section: a.section_name,
-          subject: a.subject_name
-        }))
+      // Step 4: If teacher, fetch allocations
+      const allocationQuery = `
+        SELECT 
+          classes.name AS class_name, 
+          sections.name AS section_name, 
+          subjects.name AS subject_name
+        FROM teacher_allocation
+        JOIN classes ON teacher_allocation.class = classes.id
+        JOIN sections ON teacher_allocation.section = sections.id
+        JOIN subjects ON teacher_allocation.subject = subjects.id
+        WHERE teacher_allocation.teacher = ?
+      `;
+
+      db.query(allocationQuery, [teacherId], (err, allocations) => {
+        if (err) return res.status(500).json({ error: "Failed to fetch allocations" });
+
+        return res.status(200).json({
+          success: true,
+          message: "User verified",
+          role,
+          user: decodedToken,
+          allocations: allocations.map((a) => ({
+            class: a.class_name,
+            section: a.section_name,
+            subject: a.subject_name,
+          })),
+        });
       });
     });
-  });
+  } catch (error) {
+    console.error("Token verification failed:", error);
+    return res.status(401).json({ success: false, message: "Unauthorized" });
+  }
 };
 
-
-export {verifyToken,verifyUser};
-
+export { verifyUser };
