@@ -2,40 +2,46 @@ import db from "../config/db.js";
 import { recalculateLOScore } from "./learningOutcomesMapping.js";
 import { recalculateROScore } from "./reportOutcomesMapping.js";
 
-// Get All Assessment Criteria Scores for All Students in a Section
 const getAssessmentCriteriaScores = async (req, res) => {
-    const { ac_id, year, quarter, classname } = req.headers;
-    if (!ac_id || !year || !quarter || !classname ) {
+    const { ac_id, year, quarter, classname, section } = req.headers;
+
+    if (!ac_id || !year || !quarter || !classname || !section) {
         return res.status(400).json({ message: "Missing required headers: ac_id, year, quarter, classname, section" });
     }
+
     try {
         const query = `
             SELECT sr.student, s.name AS student_name, acs.value
-            FROM ac_scores acs
-            LEFT JOIN students_records sr ON acs.student = sr.student
-            LEFT JOIN students s ON sr.student = s.id
+            FROM students_records sr
+            INNER JOIN students s ON sr.student = s.id
+            LEFT JOIN ac_scores acs ON sr.student = acs.student AND acs.ac = ?
             LEFT JOIN assessment_criterias ac ON acs.ac = ac.id
-            WHERE acs.ac = ?
-            AND ac.year = ?
+            WHERE sr.class = ?
+            AND sr.year = ?
+            AND sr.section = ?
             AND ac.quarter = ?
-            AND ac.class = ?
             ORDER BY sr.student;
         `;
-        const [results] = await db.query(query, [ac_id, year, quarter, classname]);
+
+        const [results] = await db.query(query, [ac_id, classname, year, section, quarter]);
+
         if (results.length === 0) {
             return res.status(404).json({ message: "No assessment scores found for the given filters." });
         }
+
         const students = results.map(({ student, student_name, value }) => ({
             student_id: student,
             student_name,
             value
         }));
+
         res.status(200).json(students);
     } catch (err) {
         console.error("Error fetching assessment scores:", err);
         res.status(500).json({ message: "Server error while fetching assessment scores", error: err.message });
     }
 };
+
 
 // Set Assessment Criteria Scores (POST)
 const setAssessmentCriteriaScore = async (req, res) => {
