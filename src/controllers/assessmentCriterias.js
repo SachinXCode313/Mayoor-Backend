@@ -246,98 +246,36 @@ const updateAssessmentCriteria = async (req, res) => {
 
 
 const removeAssessmentCriteria = async (req, res) => {
-    const { id } = req.query;
-
+    const { id } = req.query; // Get ID from request params
+    console.log("ID : ",id);
     if (!id) {
-        return res.status(400).json({ message: "Missing assessment criterion ID." });
+        return res.status(400).json({
+            message: 'Missing assessment criterion ID in the request.',
+        });
     }
 
-    const connection = await db.getConnection();
-    await connection.beginTransaction();
-
     try {
-        const [affectedLOs] = await connection.execute(
-            "SELECT lo FROM lo_ac_mapping WHERE ac = ?",
-            [id]
-        );
-        const loIds = affectedLOs.map(row => row.lo);
+        const deleteQuery = `
+            DELETE FROM assessment_criterias WHERE id = ?
+        `;
 
-        if (loIds.length === 0) {
-        }
-
-        const [result] = await connection.execute("DELETE FROM assessment_criterias WHERE id = ?", [id]);
+        const [result] = await db.execute(deleteQuery, [id]);
 
         if (result.affectedRows === 0) {
-            await connection.rollback();
-            return res.status(404).json({ message: "Assessment criterion not found." });
+            return res.status(404).json({
+                message: 'Assessment criterion not found.',
+            });
         }
-
-        let loRecalculateList = new Set();
-
-        for (const lo of loIds) {
-            const [remainingACs] = await connection.execute(
-                "SELECT COUNT(*) AS count FROM lo_ac_mapping WHERE lo = ?",
-                [lo]
-            );
-
-            if (remainingACs[0].count === 0) {
-                await connection.execute(
-                    "UPDATE lo_scores SET value = 0 WHERE lo = ?",
-                    [lo]
-                );
-            }
-
-            loRecalculateList.add(lo);
-        }
-
-        for (const lo of loRecalculateList) {
-            await recalculateLOScore(connection, lo);
-        }
-
-        const [affectedROs] = await connection.execute(
-            `SELECT DISTINCT ro FROM ro_lo_mapping WHERE lo IN (${Array.from(loRecalculateList).join(",")})`,
-            [Array.from(loRecalculateList)]
-            
-
-        );
-        
-        const roIds = new Set(affectedROs.map(row => row.ro));
-
-        if (roIds.size === 0) {
-            console.log("No ROs found for the affected LOs.");
-        }
-
-        for (const ro of roIds) {
-            console.log(`Recalculating RO Score for RO ${ro}`);
-            await recalculateROScore(connection, ro);
-            const [updatedRO] = await connection.execute(
-                "SELECT value FROM ro_scores WHERE ro = ?",
-                [ro]
-            );
-
-            if (updatedRO.length > 0) {
-                console.log(`RO ${ro} recalculated successfully. New score: ${updatedRO[0].value}`);
-            } else {
-                console.log(`RO ${ro} recalculation failed. No update found.`);
-            }
-        }
-
-        await connection.commit();
-        console.log(" AC deleted successfully. LO and RO scores updated.");
 
         return res.status(200).json({
-            message: "Assessment criterion deleted successfully. LO and RO scores updated accordingly.",
+            message: 'Assessment criterion deleted successfully',
         });
-
     } catch (err) {
-        await connection.rollback();
-        console.error(" Error deleting AC:", err);
+        console.error('Error deleting assessment criteria:', err);
         return res.status(500).json({
-            message: "Server error while deleting assessment criteria",
+            message: 'Server error while deleting assessment criteria',
             error: err.message,
         });
-    } finally {
-        connection.release();
     }
 };
 

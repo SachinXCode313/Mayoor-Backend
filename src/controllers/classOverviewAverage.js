@@ -87,7 +87,7 @@ const getClassAverageAC = async (req, res) => {
             return {
                 ac_id: row.ac_id,
                 ac_name: row.ac_name,
-                average_score: row.average_score !== null ? parseFloat(row.average_score) : 0,
+                average_score: row.average_score !== null ? parseFloat(row.average_score) : null,
                 student_counts: counts,
                 students: grouped
             };
@@ -175,7 +175,7 @@ const getClassAverageLO = async (req, res) => {
             LEFT JOIN lo_scores los ON los.lo = lo.id
             LEFT JOIN students_records sr ON los.student = sr.id
             WHERE lo.subject = ? AND lo.quarter = ?
-              AND (sr.year = ? AND sr.class = ? AND sr.section = ? OR sr.id IS NULL)
+              AND (sr.year = ? AND sr.class = ? AND sr.section = ?)
             GROUP BY lo.id, lo.name
             ORDER BY lo.id;
         `, [subject, quarter, year, classname, section]);
@@ -209,7 +209,7 @@ const getClassAverageLO = async (req, res) => {
         const result = loAverages.map(row => ({
             lo_id: row.lo_id,
             lo_name: row.lo_name,
-            average_score: row.average_score !== null ? parseFloat(row.average_score) : 0,
+            average_score: row.average_score !== null ? parseFloat(row.average_score) : null,
             students: studentGroups[row.lo_id] || {
                 above_0_67: [], between_0_35_0_67: [], below_0_35: []
             }
@@ -291,11 +291,11 @@ const getClassAverageRO = async (req, res) => {
             FROM report_outcomes ro
             LEFT JOIN ro_scores ros ON ros.ro = ro.id
             LEFT JOIN students_records sr ON ros.student = sr.id
-            WHERE ro.subject = ? AND ro.quarter = ?
-              AND (sr.year = ? AND sr.class = ? AND sr.section = ? OR sr.id IS NULL)
+            WHERE ro.subject = ? AND ro.year = ?
+              AND (sr.year = ? AND sr.class = ? AND sr.section = ? )
             GROUP BY ro.id, ro.name
             ORDER BY ro.id;
-        `, [subject, quarter, year, classname, section]);
+        `, [subject, year, year, classname, section]);
 
         const [students] = await db.query(`
             SELECT ros.ro AS ro_id, s.id AS student_id, s.name AS student_name, ros.value AS score
@@ -303,8 +303,8 @@ const getClassAverageRO = async (req, res) => {
             JOIN students_records sr ON ros.student = sr.id
             JOIN students s ON sr.student = s.id
             WHERE sr.year = ? AND sr.class = ? AND sr.section = ?
-              AND ros.ro IN (SELECT id FROM report_outcomes WHERE subject = ? AND quarter = ?);
-        `, [year, classname, section, subject, quarter]);
+              AND ros.ro IN (SELECT id FROM report_outcomes WHERE subject = ? AND year = ?);
+        `, [year, classname, section, subject, year]);
 
         // Group students per RO
         const studentGroups = {};
@@ -326,7 +326,7 @@ const getClassAverageRO = async (req, res) => {
         const result = roAverages.map(row => ({
             ro_id: row.ro_id,
             ro_name: row.ro_name,
-            average_score: row.average_score !== null ? parseFloat(row.average_score) : 0,
+            average_score: row.average_score !== null ? parseFloat(row.average_score) : null,
             students: studentGroups[row.ro_id] || {
                 above_0_67: [], between_0_35_0_67: [], below_0_35: []
             }

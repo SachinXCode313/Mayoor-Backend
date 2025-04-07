@@ -42,16 +42,13 @@ const getAssessmentCriteriaScores = async (req, res) => {
     }
 };
 
-
 // Set Assessment Criteria Scores (POST)
 const setAssessmentCriteriaScore = async (req, res) => {
     try {
         const { year, quarter, classname, section } = req.headers;
         let { ac_id, scores } = req.body;
-
         // Convert NaN values to NULL
         scores = scores.map(score => isNaN(score.obtained_marks) ? null : score);
-
         const result = await recalculateAcScores(ac_id, year, quarter, classname, section, scores);
         if (result.success) {
             return res.status(201).json({ message: result.message });
@@ -69,7 +66,7 @@ const updateAssessmentCriteriaScore = async (req, res) => {
         let { ac_id, scores } = req.body;
 
         // Convert NaN values to NULL
-        scores = scores.map(score => isNaN(score) ? null : score);
+        scores = scores.map(score => isNaN(score.obtained_marks) ? null : score);
 
         const result = await recalculateAcScores(ac_id, year, quarter, classname, section, scores);
         if (result.success) {
@@ -87,7 +84,7 @@ const recalculateAcScores = async (ac_id, year, quarter, classname, section, sco
     await connection.beginTransaction();
 
     try {
-        
+
         if (!ac_id || !scores || !Array.isArray(scores) || scores.length === 0) {
             throw new Error("ac_id and valid scores array are required.");
         }
@@ -100,30 +97,39 @@ const recalculateAcScores = async (ac_id, year, quarter, classname, section, sco
             "SELECT max_marks FROM assessment_criterias WHERE id = ? AND quarter = ? AND year = ? AND class = ?",
             [ac_id, quarter, year, classname] // Check if 'class' should be 'classname'
         );
-        
+
         const max_marks = criteriaRows[0]?.max_marks;
         if (!max_marks) {
             throw new Error("Max marks not set for this assessment criteria.");
         }
-        
+        // Clean scores: remove any completely null or invalid objects
+        scores = scores.filter(score => score !== null && typeof score === "object");
+
         let validScores = scores
-            .filter(({ student_id, obtained_marks }) => student_id && obtained_marks !== null && obtained_marks <= max_marks)
-            .map(({ student_id, obtained_marks }) => [student_id, ac_id, obtained_marks / max_marks]);
-        
+            .filter(({ student_id }) => student_id) // Ensure student_id exists
+            .map(({ student_id, obtained_marks }) => {
+                if (obtained_marks === null || isNaN(obtained_marks)) {
+                    return [student_id, ac_id, null];
+                } else if (obtained_marks <= max_marks) {
+                    return [student_id, ac_id, obtained_marks / max_marks];
+                } else {
+                    throw new Error(`Obtained marks for student ${student_id} exceed max_marks`);
+                }
+            });
+
         if (validScores.length === 0) {
             throw new Error("No valid scores to process.");
         }
-        
 
         // Insert or update AC scores
-        const valuesPlaceholder = validScores.map(() => "(?, ?, ?)").join(", ");
+        const valuesPlaceholder = validScores.map(() => '(?, ?, ?)').join(', ');
         const flattenedValues = validScores.flat();
 
         const query = `
             INSERT INTO ac_scores (student, ac, value)
             VALUES ${valuesPlaceholder}
-            ON DUPLICATE KEY UPDATE value = VALUES(value);
-        `;
+            ON DUPLICATE KEY UPDATE value = VALUES(value);`;
+
         await connection.query(query, flattenedValues);
 
         // Trigger LO Score Recalculation
@@ -135,7 +141,7 @@ const recalculateAcScores = async (ac_id, year, quarter, classname, section, sco
         if (loMappings.length > 0) {
             for (const { lo, priority } of loMappings) {
                 if (priority) {
-                    const result = await recalculateLOScore(connection, lo,scores);
+                    const result = await recalculateLOScore(connection, lo, scores);
                 } else {
                     console.warn(`Skipping LO (${lo}): No priority assigned.`);
                 }
@@ -154,7 +160,7 @@ const recalculateAcScores = async (ac_id, year, quarter, classname, section, sco
                     const result = await recalculateROScore(connection, ro);
                 } else {
                     console.warn(`Skipping RO (${ro}): No priority assigned.`);
-                } 
+                }
             }
         }
 
