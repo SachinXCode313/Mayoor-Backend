@@ -142,7 +142,6 @@ const getLearningOutcomesMapping = async (req, res) => {
     }
 };
 
-// Update Learning Outcome Mapping
 const updateLearningOutcomeMapping = async (req, res) => {
     const connection = await db.getConnection();
     await connection.beginTransaction();
@@ -155,38 +154,42 @@ const updateLearningOutcomeMapping = async (req, res) => {
         if (!lo_id || !year || !quarter || !classname || !section || !subject) {
             return res.status(400).json({ error: "Missing required headers or lo_id." });
         }
+
         if (!data || !Array.isArray(data) || data.length === 0) {
             return res.status(400).json({ error: "Invalid data format. Expected an array of objects with ac_id and priority." });
         }
-        const validPriorities = { h: 3, m: 2, l: 1 };
+
+        const validPriorities = { h: 0.5, m: 0.3, l: 0.2 };
         for (const item of data) {
             if (!validPriorities[item.priority]) {
                 return res.status(400).json({ error: `Invalid priority '${item.priority}'. Must be 'h', 'm', or 'l'.` });
             }
         }
+
         const [roRows] = await connection.query(
             "SELECT ro FROM ro_lo_mapping WHERE lo = ?",
             [lo_id]
         );
         const roIds = roRows.map(row => row.ro);
-        // Fetch existing priorities
+
         const [existingMappings] = await connection.query(
             "SELECT ac, priority FROM lo_ac_mapping WHERE lo = ?",
             [lo_id]
         );
         const currentPriorityMap = new Map(existingMappings.map(row => [row.ac, row.priority]));
 
-        // Fetch valid students
         const [studentRows] = await connection.query(
             "SELECT student FROM students_records WHERE year = ? AND class = ? AND section = ?",
             [year, classname, section]
         );
+
         if (studentRows.length === 0) {
             return res.status(404).json({ error: "No students found in students_records for the given filters." });
         }
-        const studentIds = studentRows.map(row => row.student);
 
-        // Validate ACs
+        // ✅ Changed here to wrap each student in an object with key `student_id`
+        const studentIds = studentRows.map(row => ({ student_id: row.student }));
+
         const inputAcIds = data.map(item => item.ac_id);
         const [validAcRows] = await connection.query(
             "SELECT id FROM assessment_criterias WHERE id IN (?)",
@@ -198,43 +201,37 @@ const updateLearningOutcomeMapping = async (req, res) => {
         }
 
         let priorityChanged = false;
-        const loAcMappingPromises = data.map(async (item) => {
+
+        // Track changes to priorities
+        for (const item of data) {
             const { ac_id, priority } = item;
-
-            // Check if priority has changed
-            if (currentPriorityMap.get(ac_id) !== priority) {
+            const existingPriority = currentPriorityMap.get(ac_id);
+            if (existingPriority !== priority) {
                 priorityChanged = true;
+
+                await connection.query(
+                    "UPDATE lo_ac_mapping SET priority = ? WHERE lo = ? AND ac = ?",
+                    [priority, lo_id, ac_id]
+                );
             }
-
-            // Update priority in database
-            await connection.query(
-                "UPDATE lo_ac_mapping SET priority = ? WHERE lo = ? AND ac = ?",
-                [priority, lo_id, ac_id]
-            );
-        });
-
-        await Promise.all(loAcMappingPromises);
-
-        // **Collect warnings**
-        let allWarnings = [];
-
-        // **Recalculate Scores if priorities changed**
-        let recalculationMessage = "No priority changes detected.";
-        if (priorityChanged) {
-            const loWarnings = await recalculateLOScore(connection, lo_id, studentIds, data);
-            allWarnings.push(...loWarnings);
-
-            for (const ro_id of roIds) {
-                const roWarnings = await recalculateROScore(connection, ro_id, studentIds, data);
-                allWarnings.push(...roWarnings);
-            }
-
-            recalculationMessage = "Priorities changed and scores recalculated.";
         }
+
+        // ⚠️ Always recalculate, regardless of change
+        let allWarnings = [];
+        const loWarnings = await recalculateLOScore(connection, lo_id, studentIds, data);
+        allWarnings.push(...loWarnings);
+
+        for (const ro_id of roIds) {
+            const roWarnings = await recalculateROScore(connection, ro_id, studentIds, data);
+            allWarnings.push(...roWarnings);
+        }
+
         await connection.commit();
+
         res.status(200).json({
-            message: `LO mapping updated successfully. ${recalculationMessage}`,
-            warnings: allWarnings.length ? allWarnings : "No warnings."
+            message: `LO mapping updated successfully. ${priorityChanged ? "Priorities updated." : "No changes in priorities, but recalculation done."}`,
+            warnings: allWarnings.length ? allWarnings : "No warnings.",
+            recalculated: true
         });
 
     } catch (error) {

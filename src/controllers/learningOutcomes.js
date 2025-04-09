@@ -1,4 +1,4 @@
-
+import { recalculateROScore } from "./reportOutcomesMapping.js";
 import db from "../config/db.js";
 //get learning outcome
 const getLearningOutcomes = async (req, res) => {
@@ -184,59 +184,108 @@ const updateLearningOutcome = async (req, res) => {
     }
 };
 
-// Function to Recalculate RO Scores when mappings change
-const recalculateROScore = async (connection, roId) => {
-    const [studentScores] = await connection.execute(
-        `SELECT ls.student, SUM(ls.value * CASE 
-            WHEN rlm.priority = 'h' THEN 0.5
-            WHEN rlm.priority = 'm' THEN 0.3
-            WHEN rlm.priority = 'l' THEN 0.2
-            ELSE 0 END) AS total_score
-         FROM lo_scores ls
-         JOIN ro_lo_mapping rlm ON ls.lo = rlm.lo
-         WHERE rlm.ro = ?
-         GROUP BY ls.student`,
-        [roId]
-    );
+// // Function to Recalculate RO Scores when mappings change
+// const recalculateROScore = async (connection, roId) => {
+//     const [studentScores] = await connection.execute(
+//         `SELECT ls.student, SUM(ls.value * CASE 
+//             WHEN rlm.priority = 'h' THEN 0.5
+//             WHEN rlm.priority = 'm' THEN 0.3
+//             WHEN rlm.priority = 'l' THEN 0.2
+//             ELSE 0 END) AS total_score
+//          FROM lo_scores ls
+//          JOIN ro_lo_mapping rlm ON ls.lo = rlm.lo
+//          WHERE rlm.ro = ?
+//          GROUP BY ls.student`,
+//         [roId]
+//     );
 
-    for (const { student, total_score } of studentScores) {
-        await connection.execute(
-            `INSERT INTO ro_scores (student, ro, value) VALUES (?, ?, ?)
-             ON DUPLICATE KEY UPDATE value = VALUES(value)`,
-            [student, roId, total_score]
-        );
-    }
-};
-
+//     for (const { student, total_score } of studentScores) {
+//         await connection.execute(
+//             `INSERT INTO ro_scores (student, ro, value) VALUES (?, ?, ?)
+//              ON DUPLICATE KEY UPDATE value = VALUES(value)`,
+//             [student, roId, total_score]
+//         );
+//     }
+// };
 
 const removeLearningOutcome = async (req, res) => {
-    const { lo_id } = req.query; // Expecting LO ID in URL
+    const { id } = req.query;
 
-    if (!lo_id) {
-        return res.status(400).json({ message: "Missing required parameter: lo_id" });
+    if (!id) {
+        console.log("[DEBUG] Missing LO ID");
+        return res.status(400).json({ message: "Missing LO ID." });
     }
 
-    try {
-        // Check if LO exists
-        const [existingLO] = await db.execute(
-            "SELECT id FROM learning_outcomes WHERE id = ?",
-            [lo_id]
-        );
+    const connection = await db.getConnection();
+    await connection.beginTransaction();
 
-        if (existingLO.length === 0) {
-            return res.status(404).json({ message: "Learning Outcome not found" });
+    try {
+        console.log(`[DEBUG] Starting LO removal process for LO ID: ${id}`);
+
+        // Step 1: Get all ROs mapped to this LO
+        const [roRows] = await connection.execute(
+            "SELECT DISTINCT ro FROM ro_lo_mapping WHERE lo = ?",
+            [id]
+        );
+        const roIds = roRows.map(row => row.ro);
+        console.log(`[DEBUG] Affected RO IDs:`, roIds);
+
+        // Step 2: Delete LO scores (not the RO scores yet)
+        await connection.execute(
+            "DELETE FROM lo_scores WHERE lo = ?",
+            [id]
+        );
+        console.log(`[DEBUG] Deleted LO scores for LO ID ${id}`);
+
+        // Step 3: Delete mapping and the LO
+        await connection.execute(
+            "DELETE FROM ro_lo_mapping WHERE lo = ?",
+            [id]
+        );
+        console.log(`[DEBUG] Deleted ro_lo_mapping for LO ID ${id}`);
+
+        const [result] = await connection.execute(
+            "DELETE FROM learning_outcomes WHERE id = ?",
+            [id]
+        );
+        if (result.affectedRows === 0) {
+            console.log(`[DEBUG] LO ID ${id} not found.`);
+            await connection.rollback();
+            return res.status(404).json({ message: "Learning Outcome not found." });
+        }
+        console.log(`[DEBUG] Deleted LO entry.`);
+
+        // Step 4: Recalculate RO scores AFTER LO + mapping is deleted
+        let allWarnings = [];
+        for (const ro_id of roIds) {
+            console.log(`[DEBUG] Recalculating RO Score for RO ID: ${ro_id}`);
+            const warnings = await recalculateROScore(connection, ro_id);
+            if (warnings?.length > 0) {
+                console.log(`[DEBUG] Warnings for RO ${ro_id}:`, warnings);
+                allWarnings.push(...warnings);
+            } else {
+                console.log(`[DEBUG] RO ${ro_id} recalculated successfully.`);
+            }
         }
 
-        // Delete the LO (cascading will take care of related entries)
-        await db.execute(
-            "DELETE FROM learning_outcomes WHERE id = ?",
-            [lo_id]
-        );
+        await connection.commit();
+        console.log(`[DEBUG] Transaction committed successfully.`);
 
-        res.status(200).json({ message: "Learning Outcome deleted successfully" });
+        return res.status(200).json({
+            message: "Learning Outcome deleted and RO scores recalculated successfully.",
+            ...(allWarnings.length > 0 && { warnings: allWarnings })
+        });
+
     } catch (err) {
-        console.error("Error deleting Learning Outcome:", err);
-        res.status(500).json({ message: "Server error", error: err.message });
+        await connection.rollback();
+        console.error("[DEBUG] Error during LO deletion process:", err);
+        return res.status(500).json({
+            message: "Server error while deleting Learning Outcome.",
+            error: err.message,
+        });
+    } finally {
+        console.log(`[DEBUG] Releasing DB connection`);
+        connection.release();
     }
 };
 

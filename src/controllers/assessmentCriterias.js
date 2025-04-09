@@ -2,75 +2,80 @@ import db from "../config/db.js";
 import { recalculateAcScores } from "./assessmentCriteriasScores.js";
 import { recalculateLOScore } from "./learningOutcomesMapping.js";
 import { recalculateROScore } from "./reportOutcomesMapping.js";
-
 // Get Assessment Criterias
 const getAssessmentCriterias = async (req, res) => {
-    const { subject, year, quarter, classname } = req.headers;
+    const { subject, year, quarter, classname, section } = req.headers;
 
-    console.log(`Subject: ${subject}, Year: ${year}, Quarter: ${quarter}, Class: ${classname}`);
-
-    // Validate required headers
-    if (!subject || !year || !quarter || !classname) {
+    if (!subject || !year || !quarter || !classname || !section) {
         return res.status(400).json({
-            message: 'Invalid input. Subject, Class, Year, and Quarter are required in the headers.',
+            message: 'Invalid input. Subject, Class, Section, Year, and Quarter are required in the headers.',
         });
     }
 
     try {
-        // Fetch Assessment Criterias with Average Score
-        const acQuery = `
-            SELECT ac.id AS ac_id, ac.name AS ac_name, ac.max_marks,
-                   COALESCE(AVG(ascore.value), NULL) AS average_score  -- NULL if no scores
-            FROM assessment_criterias ac
-            LEFT JOIN ac_scores ascore ON ac.id = ascore.ac
-            WHERE ac.subject = ? AND ac.year = ? AND ac.quarter = ? AND ac.class = ?
-            GROUP BY ac.id, ac.name, ac.max_marks
-        `;
-        const [assessmentCriterias] = await db.execute(acQuery, [subject, year, quarter, classname]);
+        // Step 1: Get all students in the class & section
+        const [students] = await db.execute(
+            `SELECT student FROM students_records WHERE class = ? AND section = ? AND year = ?`,
+            [classname, section, year]
+        );
+        const totalStudents = students.length;
 
-        if (assessmentCriterias.length === 0) {
-            return res.status(404).json({
-                message: 'No assessment criteria found for the given filters.',
-            });
+        if (totalStudents === 0) {
+            return res.status(404).json({ message: 'No students found for the given class and section.' });
         }
 
-        // Get AC IDs
-        const acIds = assessmentCriterias.map(ac => ac.ac_id);
-        if (acIds.length === 0) {
-            return res.status(200).json(assessmentCriterias); // No ACs, return empty response
+        // Step 2: Get ACs with their average scores
+        const [acs] = await db.execute(
+            `SELECT ac.id AS ac_id, ac.name AS ac_name, ac.max_marks,
+                    COALESCE(AVG(ascore.value), NULL) AS average_score
+             FROM assessment_criterias ac
+             LEFT JOIN ac_scores ascore ON ac.id = ascore.ac
+             WHERE ac.subject = ? AND ac.year = ? AND ac.quarter = ? AND ac.class = ?
+             GROUP BY ac.id, ac.name, ac.max_marks`,
+            [subject, year, quarter, classname]
+        );
+
+        if (acs.length === 0) {
+            return res.status(404).json({ message: 'No assessment criteria found for the given filters.' });
         }
 
-        // Fetch LOs mapped to ACs
-        const loQuery = `
-            SELECT lam.ac, lo.id AS lo_id, lo.name AS lo_name
-            FROM learning_outcomes lo
-            JOIN lo_ac_mapping lam ON lo.id = lam.lo
-            WHERE lam.ac IN (${acIds.map(() => "?").join(", ")})
-        `;
-        const [learningOutcomes] = await db.execute(loQuery, acIds);
+        // Step 3: Get count of students who have non-null scores per AC
+        const acIds = acs.map(ac => ac.ac_id);
+        const [scoredCounts] = await db.execute(
+            `SELECT ac, COUNT(DISTINCT student) AS scored_count
+             FROM ac_scores
+             WHERE ac IN (${acIds.map(() => '?').join(', ')})
+               AND student IN (${students.map(() => '?').join(', ')})
+               AND value IS NOT NULL
+             GROUP BY ac`,
+            [...acIds, ...students.map(s => s.student)]
+        );
 
-        // Map LOs to corresponding ACs
-        const acWithLO = assessmentCriterias.map(ac => ({
-            ...ac,
-            average_score: ac.average_score ? parseFloat(ac.average_score) : 0, // Convert to float, handle null
-            learning_outcomes: learningOutcomes
-                .filter(lo => lo.ac === ac.ac_id)
-                .map(lo => ({
-                    lo_id: lo.lo_id,
-                    lo_name: lo.lo_name
-                }))
+        const scoredMap = {};
+        scoredCounts.forEach(row => {
+            scoredMap[row.ac] = row.scored_count;
+        });
+
+        // Step 4: Add remaining_students to ACs
+        const final = acs.map(ac => ({
+            ac_id: ac.ac_id,
+            ac_name: ac.ac_name,
+            max_marks: ac.max_marks,
+            average_score: ac.average_score ? parseFloat(ac.average_score) : null,
+            remaining_students: totalStudents - (scoredMap[ac.ac_id] || 0),
         }));
 
-        return res.status(200).json(acWithLO);
+        return res.status(200).json(final);
     } catch (err) {
         console.error('Error retrieving assessment criteria:', err);
-
         return res.status(500).json({
             message: 'Server error while fetching assessment criteria',
             error: err.message,
         });
     }
 };
+
+
 
 
 
@@ -245,7 +250,6 @@ const updateAssessmentCriteria = async (req, res) => {
     }
 };
 
-
 const removeAssessmentCriteria = async (req, res) => {
     const { id } = req.query;
 
@@ -347,7 +351,6 @@ const removeAssessmentCriteria = async (req, res) => {
         connection.release();
     }
 };
-
 export { 
     getAssessmentCriterias, 
     addAssessmentCriteria, 
