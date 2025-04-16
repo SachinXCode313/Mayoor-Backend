@@ -1,15 +1,11 @@
 import db from "../config/db.js";
-import fs from "fs";
+import { PassThrough } from "stream";
 import fastCsv from "fast-csv";
 import archiver from "archiver";
 import { Parser } from "json2csv";
 
-// General CSV builder for AC, LO, RO
-const generateCsv = async (query, params, filename, prefix) => {
-    if (params.includes(undefined)) {
-        throw new Error("Invalid or missing parameters for query execution");
-    }
-
+// 🔧 In-memory CSV for AC, LO, RO
+const generateCsvBuffer = async (query, params, prefix) => {
     const [rows] = await db.execute(query, params);
     const studentMap = {};
 
@@ -25,13 +21,18 @@ const generateCsv = async (query, params, filename, prefix) => {
     const headers = ["Student Roll No.", "Student Name", ...categories];
 
     return new Promise((resolve, reject) => {
-        const ws = fs.createWriteStream(filename);
-        fastCsv.write(finalRows, { headers }).pipe(ws).on("finish", resolve).on("error", reject);
+        const stream = new PassThrough();
+        const chunks = [];
+        stream.on("data", chunk => chunks.push(chunk));
+        stream.on("end", () => resolve(Buffer.concat(chunks)));
+        fastCsv.write(finalRows, { headers })
+            .on("error", reject)
+            .pipe(stream);
     });
 };
 
-// Term Report CSV builder
-const generateTermCsv = async (quarter, classname, section, year, subject, filename) => {
+// 🔧 In-memory CSV for Term Report
+const generateTermCsvBuffer = async (quarter, classname, section, year, subject) => {
     const termQuarterMap = {
         3: [1, 2, 3],
         6: [4, 5, 6],
@@ -46,8 +47,8 @@ const generateTermCsv = async (quarter, classname, section, year, subject, filen
 
     const [students] = await db.query(
         `SELECT sr.student, s.name FROM students_records sr
-     JOIN students s ON sr.student = s.id
-     WHERE sr.class = ? AND sr.section = ? AND sr.year = ?`,
+         JOIN students s ON sr.student = s.id
+         WHERE sr.class = ? AND sr.section = ? AND sr.year = ?`,
         [classname, section, year]
     );
     if (students.length === 0) throw new Error("No students found");
@@ -80,14 +81,14 @@ const generateTermCsv = async (quarter, classname, section, year, subject, filen
     const fields = ['studentName', ...ros.map(r => r.name)];
     const parser = new Parser({ fields });
     const csv = parser.parse(csvData);
-    fs.writeFileSync(filename, csv);
+    return Buffer.from(csv, "utf-8");
 };
 
-// Main report exporter
+// 🚀 Main Report Exporter
 const getReport = async (req, res) => {
     const { classname, section, year, subject, quarter } = req.headers;
-
     let reportTypes = req.headers["report-type"];
+
     if (!reportTypes) {
         return res.status(400).json({ error: "Missing report-type header" });
     }
@@ -102,88 +103,94 @@ const getReport = async (req, res) => {
         return type;
     });
 
-    const files = [];
-
     try {
+        const files = [];
+
         for (let type of reportTypes) {
+            let buffer, filename;
+
             switch (type) {
                 case "ac":
-                    await generateCsv(
+                    buffer = await generateCsvBuffer(
                         `SELECT sr.id AS roll_no, s.name AS student_name, ac.id AS category, acs.value AS score 
-             FROM ac_scores acs 
-             JOIN students_records sr ON acs.student = sr.id 
-             JOIN students s ON sr.student = s.id 
-             JOIN assessment_criterias ac ON acs.ac = ac.id 
-             WHERE sr.year = ? AND ac.quarter = ? AND sr.class = ? AND sr.section = ? AND ac.subject = ?`,
+                         FROM ac_scores acs 
+                         JOIN students_records sr ON acs.student = sr.id 
+                         JOIN students s ON sr.student = s.id 
+                         JOIN assessment_criterias ac ON acs.ac = ac.id 
+                         WHERE sr.year = ? AND ac.quarter = ? AND sr.class = ? AND sr.section = ? AND ac.subject = ?`,
                         [year, quarter, classname, section, subject],
-                        "ac_scores.csv",
                         "AC"
                     );
-                    files.push("ac_scores.csv");
+                    filename = "ac_scores.csv";
                     break;
 
                 case "lo":
-                    await generateCsv(
+                    buffer = await generateCsvBuffer(
                         `SELECT sr.id AS roll_no, s.name AS student_name, lo.id AS category, los.value AS score 
-             FROM lo_scores los 
-             JOIN students_records sr ON los.student = sr.id 
-             JOIN students s ON sr.student = s.id 
-             JOIN learning_outcomes lo ON los.lo = lo.id 
-             WHERE sr.year = ? AND lo.quarter = ? AND sr.class = ? AND sr.section = ? AND lo.subject = ?`,
+                         FROM lo_scores los 
+                         JOIN students_records sr ON los.student = sr.id 
+                         JOIN students s ON sr.student = s.id 
+                         JOIN learning_outcomes lo ON los.lo = lo.id 
+                         WHERE sr.year = ? AND lo.quarter = ? AND sr.class = ? AND sr.section = ? AND lo.subject = ?`,
                         [year, quarter, classname, section, subject],
-                        "lo_scores.csv",
                         "LO"
                     );
-                    files.push("lo_scores.csv");
+                    filename = "lo_scores.csv";
                     break;
 
                 case "ro":
-                    await generateCsv(
+                    buffer = await generateCsvBuffer(
                         `SELECT sr.id AS roll_no, s.name AS student_name, ro.id AS category, ros.value AS score 
-             FROM ro_scores ros 
-             JOIN students_records sr ON ros.student = sr.id 
-             JOIN students s ON sr.student = s.id 
-             JOIN report_outcomes ro ON ros.ro = ro.id 
-             WHERE sr.year = ? AND ro.year = ? AND sr.class = ? AND sr.section = ? AND ro.subject = ? AND ros.quarter = ?`,
+                         FROM ro_scores ros 
+                         JOIN students_records sr ON ros.student = sr.id 
+                         JOIN students s ON sr.student = s.id 
+                         JOIN report_outcomes ro ON ros.ro = ro.id 
+                         WHERE sr.year = ? AND ro.year = ? AND sr.class = ? AND sr.section = ? AND ro.subject = ? AND ros.quarter = ?`,
                         [year, year, classname, section, subject, quarter],
-                        "ro_scores.csv",
                         "RO"
                     );
-                    files.push("ro_scores.csv");
+                    filename = "ro_scores.csv";
                     break;
 
                 case "term1":
-                    await generateTermCsv(3, classname, section, year, subject, "term1_report.csv");
-                    files.push("term1_report.csv");
+                    buffer = await generateTermCsvBuffer(3, classname, section, year, subject);
+                    filename = "term1_report.csv";
                     break;
 
                 case "term2":
-                    await generateTermCsv(6, classname, section, year, subject, "term2_report.csv");
-                    files.push("term2_report.csv");
+                    buffer = await generateTermCsvBuffer(6, classname, section, year, subject);
+                    filename = "term2_report.csv";
                     break;
 
                 default:
                     throw new Error(`Unknown report type: ${type}`);
             }
+
+            files.push({ buffer, filename });
         }
 
         if (files.length === 1) {
-            res.download(files[0]);
+            const { buffer, filename } = files[0];
+            res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+            res.setHeader("Content-Type", "text/csv");
+            res.end(buffer);
         } else {
-            const zipPath = "reports.zip";
-            const output = fs.createWriteStream(zipPath);
+            res.setHeader("Content-Disposition", "attachment; filename=reports.zip");
+            res.setHeader("Content-Type", "application/zip");
+
             const archive = archiver("zip");
+            archive.pipe(res);
 
-            archive.pipe(output);
-            files.forEach(file => archive.file(file, { name: file }));
+            files.forEach(({ buffer, filename }) => {
+                archive.append(buffer, { name: filename });
+            });
+
             archive.finalize();
-
-            output.on("close", () => res.download(zipPath));
         }
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: err.message });
     }
-}
+};
 
-export default getReport
+export default getReport;
