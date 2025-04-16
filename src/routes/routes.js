@@ -15,8 +15,8 @@ import { saveToken,sendNotification } from "../controllers/sendNotification.js";
 import {verifyUser} from "../controllers/userVerfication.js";
 import getStudentReport from "../controllers/studentReport.js";
 import getMappingTree from "../controllers/mappingTree.js";
-import { getReport} from "../controllers/downloadReportCard.js";
 import getTeacherDashboard from "../controllers/teacherDashboard.js";
+import getReport from "../controllers/downloadReportCard.js";
 
 const routers = express.Router();
 
