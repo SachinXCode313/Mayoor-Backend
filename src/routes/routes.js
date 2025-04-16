@@ -15,7 +15,7 @@ import { saveToken,sendNotification } from "../controllers/sendNotification.js";
 import {verifyUser} from "../controllers/userVerfication.js";
 import getStudentReport from "../controllers/studentReport.js";
 import getMappingTree from "../controllers/mappingTree.js";
-import { getACReport, getLOReport, getROReport } from "../controllers/downloadReportCard.js";
+import { getReport} from "../controllers/downloadReportCard.js";
 import getTeacherDashboard from "../controllers/teacherDashboard.js";
 
 const routers = express.Router();
@@ -40,9 +40,7 @@ routers.get('/class-overview-ro-avg', getClassAverageRO)
 routers.get('/student-report', getStudentReport)
 routers.get('/mapping-tree', getMappingTree)
 routers.get('/verify-user',verifyUser)
-routers.get('/ac-report',getACReport)
-routers.get('/lo-report',getLOReport)
-routers.get('/ro-report',getROReport)
+routers.get('/download-report',getReport)
 
 
 routers.post("/teachers", createTeacher);
