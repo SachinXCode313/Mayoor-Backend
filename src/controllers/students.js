@@ -33,7 +33,7 @@ const getStudents = async (req, res) => {
         // SQL query to get students' details along with their record information
         const query = `
         SELECT 
-            s.id, 
+            sc.id, 
             s.name, 
             sc.year, 
             sc.section, 
