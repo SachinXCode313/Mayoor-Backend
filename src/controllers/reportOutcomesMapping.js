@@ -1,101 +1,131 @@
 import db from "../config/db.js";
 
-const recalculateROScore = async (connection, ro_id) => {
+const recalculateROScore = async (connection, ro_id, classname = null, section = null, year = null, quarter = null) => {
     try {
-        const warnings = []; // Store warnings
+        const warnings = [];
 
-        // Priority values
+        if (!quarter) {
+            const msg = `Missing required parameter: 'quarter'. Please provide a quarter (e.g., 'Q1', 'Q2', etc.).`;
+            console.warn(`[WARNING] ${msg}`);
+            return [msg];
+        }
+
         const priorityValues = { h: 0.5, m: 0.3, l: 0.2 };
 
-        // Fetch all students linked to the given RO
-        const [studentRows] = await connection.query(
-            "SELECT DISTINCT student FROM lo_scores WHERE lo IN (SELECT lo FROM ro_lo_mapping WHERE ro = ?)",
-            [ro_id]
+        // Step 1: Fetch valid LO mappings with scores
+        const [mappings] = await connection.query(
+            `SELECT DISTINCT rlm.lo, rlm.priority 
+             FROM ro_lo_mapping rlm
+             JOIN lo_scores ls ON rlm.lo = ls.lo
+             JOIN students_records s ON ls.student = s.id
+             WHERE rlm.ro = ?
+             AND s.class = ? AND s.section = ? AND s.year = ?
+             AND ls.quarter = ?`,
+            [ro_id, classname, section, year, quarter]
         );
+
+        console.log(`[DEBUG] Filtered valid LO mappings for RO ${ro_id} in Q${quarter}: ${mappings.length}`);
+
+        if (mappings.length === 0) {
+            const [deleteResult] = await connection.query(
+                `DELETE FROM ro_scores 
+                 WHERE ro = ?
+                 AND quarter = ?
+                 AND student IN (
+                    SELECT id FROM students_records
+                    WHERE class = ? AND section = ? AND year = ?
+                 )`,
+                [ro_id, quarter, classname, section, year]
+            );
+            warnings.push(`RO ${ro_id} has no valid LOs for Q${quarter}. Deleted ${deleteResult.affectedRows} RO scores.`);
+            return warnings;
+        }
+
+        // Step 2: Get students only in filtered context
+        const [studentRows] = await connection.query(
+            `SELECT DISTINCT ls.student 
+             FROM lo_scores ls
+             JOIN students_records s ON ls.student = s.id
+             WHERE ls.lo IN (${mappings.map(() => '?').join(',')})
+             AND s.class = ? AND s.section = ? AND s.year = ?
+             AND ls.quarter = ?`,
+            [...mappings.map(row => row.lo), classname, section, year, quarter]
+        );
+
         if (studentRows.length === 0) {
-            warnings.push(`No students found for RO ${ro_id}.`);
+            warnings.push(`No students found for RO ${ro_id} in Q${quarter}.`);
             return warnings;
         }
 
         const studentIds = studentRows.map(row => row.student);
 
-        // Fetch all LO mappings for this RO
-        const [mappings] = await connection.query(
-            "SELECT lo, priority FROM ro_lo_mapping WHERE ro = ?",
-            [ro_id]
-        );
-        if (mappings.length === 0) {
-            warnings.push(`No LO mappings found for RO ${ro_id}.`);
-            return warnings;
-        }
-
-        // Calculate weight for each priority
+        // Step 3: Priority weighting
         let hCount = 0, mCount = 0, lCount = 0;
-        mappings.forEach(({ priority }) => {
+        for (const { priority } of mappings) {
             if (priority === 'h') hCount++;
             else if (priority === 'm') mCount++;
             else if (priority === 'l') lCount++;
-        });
+            else warnings.push(`Invalid priority '${priority}' found for RO ${ro_id}`);
+        }
 
-        const totalWeight = (hCount * priorityValues.h) + (mCount * priorityValues.m) + (lCount * priorityValues.l);
-        if (totalWeight === 0) {
-            warnings.push(`Invalid weight calculation for RO ${ro_id} (total weight is zero).`);
+        const totalWeight = (hCount * 0.5) + (mCount * 0.3) + (lCount * 0.2);
+
+        if (totalWeight === 0 || (hCount + mCount + lCount) === 0) {
+            const [deleteResult] = await connection.query(
+                `DELETE FROM ro_scores 
+                 WHERE ro = ? AND quarter = ?
+                 AND student IN (
+                    SELECT id FROM students_records
+                    WHERE class = ? AND section = ? AND year = ?
+                 )`,
+                [ro_id, quarter, classname, section, year]
+            );
+            warnings.push(`RO ${ro_id} has invalid priority mappings. Deleted ${deleteResult.affectedRows} RO scores.`);
             return warnings;
         }
 
-        const hWeight = priorityValues.h / totalWeight;
-        const mWeight = priorityValues.m / totalWeight;
-        const lWeight = priorityValues.l / totalWeight;
+        const hWeight = 0.5 / totalWeight;
+        const mWeight = 0.3 / totalWeight;
+        const lWeight = 0.2 / totalWeight;
 
-        // Update the weight in the ro_lo_mapping table
-        for (const { lo, priority } of mappings) {
-            let weight = priority === 'h' ? hWeight :
-                         priority === 'm' ? mWeight :
-                         priority === 'l' ? lWeight : 0;
-
-            await connection.query(
-                "UPDATE ro_lo_mapping SET weight = ? WHERE ro = ? AND lo = ?",
-                [weight, ro_id, lo]
-            );
-        }
-
-        // Recalculate RO Scores for each student
+        // Step 4: Recalculate scores per student
         for (const student_id of studentIds) {
             let weightedSum = 0;
             let validLOs = 0;
 
             for (const { lo, priority } of mappings) {
-                let weight = priority === 'h' ? hWeight :
-                             priority === 'm' ? mWeight :
-                             priority === 'l' ? lWeight : 0;
+                const weight = priority === 'h' ? hWeight :
+                               priority === 'm' ? mWeight :
+                               priority === 'l' ? lWeight : 0;
 
-                // Fetch the LO score for the student
                 const [loScoreRows] = await connection.query(
-                    "SELECT value FROM lo_scores WHERE lo = ? AND student = ?",
-                    [lo, student_id]
+                    "SELECT value FROM lo_scores WHERE lo = ? AND student = ? AND quarter = ?",
+                    [lo, student_id, quarter]
                 );
 
                 if (loScoreRows.length > 0) {
                     const loScore = loScoreRows[0].value || 0;
                     weightedSum += loScore * weight;
                     validLOs++;
-                } else {
-                    warnings.push(`No LO score found for student ${student_id} and LO ${lo}.`);
                 }
             }
 
             if (validLOs === 0) {
-                warnings.push(`Skipping RO score insert for student ${student_id} due to no valid LO scores.`);
+                await connection.query(
+                    "DELETE FROM ro_scores WHERE ro = ? AND student = ? AND quarter = ?",
+                    [ro_id, student_id, quarter]
+                );
+                warnings.push(`Deleted RO score for student ${student_id} due to no valid LO scores in Q${quarter}.`);
                 continue;
             }
 
-            // Calculate RO score
-            const roScore = weightedSum ;
+            const roScore = weightedSum;
 
-            // Insert or update RO Score
             await connection.query(
-                "INSERT INTO ro_scores (ro, student, value) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE value = ?",
-                [ro_id, student_id, roScore, roScore]
+                `INSERT INTO ro_scores (ro, student, value, quarter)
+                 VALUES (?, ?, ?, ?)
+                 ON DUPLICATE KEY UPDATE value = VALUES(value)`,
+                [ro_id, student_id, roScore, quarter]
             );
         }
 
@@ -105,6 +135,7 @@ const recalculateROScore = async (connection, ro_id) => {
         return [`Error recalculating RO score: ${error.message}`];
     }
 };
+
 
 
 // **Main Function: Update Report Outcome Mapping**
@@ -133,7 +164,8 @@ const updateReportOutcomeMapping = async (req, res) => {
         for (const item of data) {
             if (!validPriorities.includes(item.priority)) {
                 return res.status(400).json({
-                    error: `Invalid priority '${item.priority}'. Must be one of ${validPriorities.join(", ")}.` });
+                    error: `Invalid priority '${item.priority}'. Must be one of ${validPriorities.join(", ")}.`
+                });
             }
         }
 
@@ -189,7 +221,7 @@ const updateReportOutcomeMapping = async (req, res) => {
             `, [ro_id]);
 
             if (studentRows.length > 0) {
-                recalculationWarnings = await recalculateROScore(connection, ro_id, studentRows);
+                recalculationWarnings = await recalculateROScore(connection, ro_id);
                 console.log("RO scores recalculated successfully.");
             } else {
                 warnings.push("No students found to recalculate RO scores.");
@@ -232,4 +264,4 @@ const getReportOutcomesMapping = async (req, res) => {
     }
 };
 
-export { updateReportOutcomeMapping, getReportOutcomesMapping, recalculateROScore};
+export { updateReportOutcomeMapping, getReportOutcomesMapping, recalculateROScore };

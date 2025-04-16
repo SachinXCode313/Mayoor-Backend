@@ -56,13 +56,29 @@ const getAssessmentCriterias = async (req, res) => {
             scoredMap[row.ac] = row.scored_count;
         });
 
-        // Step 4: Add remaining_students to ACs
+        // Step 4: Get AC-LO mappings
+        const [loMappings] = await db.execute(
+            `SELECT acl.ac, lo.id AS lo_id, lo.name AS lo_name
+             FROM lo_ac_mapping acl
+             JOIN learning_outcomes lo ON acl.lo = lo.id
+             WHERE acl.ac IN (${acIds.map(() => '?').join(', ')})`,
+            [...acIds]
+        );
+
+        const loMap = {};
+        loMappings.forEach(row => {
+            if (!loMap[row.ac]) loMap[row.ac] = [];
+            loMap[row.ac].push({ lo_id: row.lo_id, lo_name: row.lo_name });
+        });
+
+        // Step 5: Construct response
         const final = acs.map(ac => ({
             ac_id: ac.ac_id,
             ac_name: ac.ac_name,
             max_marks: ac.max_marks,
             average_score: ac.average_score ? parseFloat(ac.average_score) : null,
             remaining_students: totalStudents - (scoredMap[ac.ac_id] || 0),
+            mapped_los: loMap[ac.ac_id] || []
         }));
 
         return res.status(200).json(final);
@@ -74,10 +90,6 @@ const getAssessmentCriterias = async (req, res) => {
         });
     }
 };
-
-
-
-
 
 // Add Assessment Criteria
 const addAssessmentCriteria = async (req, res) => {
@@ -141,7 +153,8 @@ const addAssessmentCriteria = async (req, res) => {
 
 const updateAssessmentCriteria = async (req, res) => {
     const { id } = req.query; // AC ID
-    const { name, max_marks, lo_id } = req.body; // lo_id is an array
+    const { name, max_marks, lo_id } = req.body;
+    const { quarter } = req.headers;
 
     if (!id || !name || !max_marks || !lo_id || !Array.isArray(lo_id)) {
         return res.status(400).json({
@@ -153,9 +166,8 @@ const updateAssessmentCriteria = async (req, res) => {
     await connection.beginTransaction();
 
     try {
-        // **1. Fetch current assessment criteria details**
         const [currentAC] = await connection.execute(
-            "SELECT max_marks, year, quarter, class FROM assessment_criterias WHERE id = ?",
+            "SELECT max_marks, year, quarter AS db_quarter, class, section FROM assessment_criterias WHERE id = ?",
             [id]
         );
 
@@ -163,9 +175,9 @@ const updateAssessmentCriteria = async (req, res) => {
             return res.status(404).json({ message: 'Assessment criterion not found.' });
         }
 
-        const { max_marks: currentMaxMarks, year, quarter, class: classname, section } = currentAC[0];
+        const { max_marks: currentMaxMarks, year, db_quarter, class: classname, section } = currentAC[0];
+        const effectiveQuarter = quarter || db_quarter;
 
-        // **2. Fetch current LO mappings**
         const [existingLOs] = await connection.execute(
             "SELECT lo FROM lo_ac_mapping WHERE ac = ?",
             [id]
@@ -174,31 +186,27 @@ const updateAssessmentCriteria = async (req, res) => {
         const currentLOIds = existingLOs.map(row => row.lo);
         const newLOIds = lo_id.map(lo => parseInt(lo));
 
-        const loMappingChanged = 
+        const loMappingChanged =
             currentLOIds.length !== newLOIds.length ||
             !currentLOIds.every(lo => newLOIds.includes(lo));
 
-        // **3. Update assessment criteria**
         const updateQuery = `UPDATE assessment_criterias SET name = ?, max_marks = ? WHERE id = ?`;
         await connection.execute(updateQuery, [name, max_marks, id]);
 
-        // **4. Validate that all LO IDs exist in the learning_outcomes table**
         const [validLOs] = await connection.query(
             `SELECT id FROM learning_outcomes WHERE id IN (${lo_id.map(() => '?').join(',')}) 
              AND year = ? AND quarter = ? AND class = ?`,
-            [...lo_id, year, quarter, classname]
+            [...lo_id, year, effectiveQuarter, classname]
         );
-        
+
         const validLOIds = validLOs.map(row => row.id);
 
-        // **5. Check if all provided lo_id exist**
         if (validLOIds.length !== lo_id.length) {
             return res.status(400).json({
                 message: "One or more Learning Outcome IDs (lo_id) are invalid or do not belong to the correct year/class.",
             });
         }
 
-        // **6. Delete & Insert LO-AC Mapping (if changed)**
         if (loMappingChanged) {
             await connection.execute(`DELETE FROM lo_ac_mapping WHERE ac = ?`, [id]);
 
@@ -209,25 +217,23 @@ const updateAssessmentCriteria = async (req, res) => {
                 await connection.query(insertMappingQuery, [loAcValues]);
             }
 
-            // **7. Recalculate LO Scores**
             for (const lo of validLOIds) {
                 await recalculateLOScore(connection, lo);
             }
 
-            // **8. Recalculate RO Scores for affected ROs**
             const [affectedROs] = await connection.execute(
                 `SELECT DISTINCT ro FROM ro_lo_mapping WHERE lo IN (?)`,
                 [validLOIds]
             );
+
             for (const ro of affectedROs.map(r => r.ro)) {
-                await recalculateROScore(connection, ro);
+                await recalculateROScore(connection, ro, classname, section, year, effectiveQuarter);
             }
         }
 
-        // **9. Recalculate AC Scores if max_marks changed**
         const maxMarksChanged = parseFloat(currentMaxMarks) !== parseFloat(max_marks);
         if (maxMarksChanged) {
-            await recalculateAcScores(id, year, quarter, classname, section);
+            await recalculateAcScores(id, year, effectiveQuarter, classname, section);
         }
 
         await connection.commit();
@@ -249,9 +255,9 @@ const updateAssessmentCriteria = async (req, res) => {
         connection.release();
     }
 };
-
 const removeAssessmentCriteria = async (req, res) => {
     const { id } = req.query;
+    const { classname, section, year, quarter } = req.headers;
 
     if (!id) {
         return res.status(400).json({ message: "Missing assessment criterion ID." });
@@ -261,7 +267,6 @@ const removeAssessmentCriteria = async (req, res) => {
     await connection.beginTransaction();
 
     try {
-        // Step 1: Check for affected LOs
         const [affectedLOs] = await connection.execute(
             "SELECT lo FROM lo_ac_mapping WHERE ac = ?",
             [id]
@@ -269,7 +274,6 @@ const removeAssessmentCriteria = async (req, res) => {
         const loIds = affectedLOs.map(row => row.lo);
         let loRecalculateList = new Set();
 
-        // Step 2: If LOs exist, process LO + RO recalculations
         if (loIds.length > 0) {
             for (const lo of loIds) {
                 const [remainingACs] = await connection.execute(
@@ -287,12 +291,10 @@ const removeAssessmentCriteria = async (req, res) => {
                 loRecalculateList.add(lo);
             }
 
-            // Recalculate LO scores
             for (const lo of loRecalculateList) {
                 await recalculateLOScore(connection, lo);
             }
 
-            // Check affected ROs
             const placeholders = Array.from(loRecalculateList).map(() => '?').join(',');
             const [affectedROs] = await connection.execute(
                 `SELECT DISTINCT ro FROM ro_lo_mapping WHERE lo IN (${placeholders})`,
@@ -301,9 +303,8 @@ const removeAssessmentCriteria = async (req, res) => {
 
             const roIds = new Set(affectedROs.map(row => row.ro));
 
-            // Recalculate RO scores
             for (const ro of roIds) {
-                await recalculateROScore(connection, ro);
+                await recalculateROScore(connection, ro, classname, section, year, quarter);
                 const [updatedRO] = await connection.execute(
                     "SELECT value FROM ro_scores WHERE ro = ?",
                     [ro]
@@ -317,7 +318,6 @@ const removeAssessmentCriteria = async (req, res) => {
             }
         }
 
-        // Step 3: Delete the AC
         const [result] = await connection.execute(
             "DELETE FROM assessment_criterias WHERE id = ?",
             [id]
@@ -351,6 +351,7 @@ const removeAssessmentCriteria = async (req, res) => {
         connection.release();
     }
 };
+
 export { 
     getAssessmentCriterias, 
     addAssessmentCriteria, 

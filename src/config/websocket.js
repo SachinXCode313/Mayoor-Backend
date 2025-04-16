@@ -4,7 +4,7 @@ import db from "./db.js";
 const WSPORT = process.env.WSPORT || 3500;
 const wss = new WebSocketServer({ port: WSPORT });
 
-let activeTeachers = {}; 
+let activeTeachers = {};
 
 wss.on("connection", (ws) => {
     console.log("🔵 New client connected");
@@ -12,26 +12,32 @@ wss.on("connection", (ws) => {
     ws.on("message", (message) => {
         try {
             const teacherData = JSON.parse(message);
-            const { name, email } = teacherData;
+            const { email } = teacherData;
 
-            if (name && email) {
-                console.log(`📩 Received data from: ${name} (${email})`);
+            if (email) {
+                console.log(`📩 Received data from: ${email}`);
 
                 const currentTime = new Date();
 
                 // Insert or update the teacher status
                 db.query(
-                    "INSERT INTO teachers (name, email, status, last_seen) VALUES (?, ?, 'active', ?) ON DUPLICATE KEY UPDATE status='active', last_seen=?",
-                    [name, email, currentTime, currentTime],
-                    (err) => {
+                    "UPDATE teachers SET status = 'active', last_seen = ? WHERE email = ?",
+                    [currentTime, email],
+                    (err, result) => {
                         if (err) {
                             console.error("❌ Database error:", err);
                             return;
                         }
-                        console.log(`✅ Teacher ${name} marked as active`);
-                        sendUpdatedList();
+
+                        if (result.affectedRows === 0) {
+                            console.warn(`⚠️ No teacher found with email: ${email}`);
+                        } else {
+                            console.log(`✅ Teacher ${name} marked as active`);
+                            sendUpdatedList();
+                        }
                     }
                 );
+
 
                 // Store active connection
                 activeTeachers[name] = ws;
@@ -45,37 +51,36 @@ wss.on("connection", (ws) => {
     ws.on("close", () => {
         console.log("🔴 A client disconnected");
 
-        let disconnectedTeacher = null;
+        let disconnectedEmail = null;
 
-        // Find which teacher's WebSocket has disconnected
-        for (const teacher in activeTeachers) {
-            if (activeTeachers[teacher] === ws) {
-                disconnectedTeacher = teacher;
+        // Find the disconnected WebSocket by matching email
+        for (const email in activeTeachers) {
+            if (activeTeachers[email] === ws) {
+                disconnectedEmail = email;
                 break;
             }
         }
 
-        if (disconnectedTeacher) {
-            console.log(`🔄 Updating status for: ${disconnectedTeacher}`);
+        if (disconnectedEmail) {
+            console.log(`🔄 Updating status for: ${disconnectedEmail}`);
 
             const lastSeenTime = new Date();
 
-            // Update the database to mark the teacher as inactive
             db.query(
-                "UPDATE teachers SET status='inactive', last_seen=? WHERE name=?",
-                [lastSeenTime, disconnectedTeacher],
+                "UPDATE teachers SET status='inactive', last_seen=? WHERE email=?",
+                [lastSeenTime, disconnectedEmail],
                 (err) => {
                     if (err) {
                         console.error("❌ Error updating teacher status:", err);
                     } else {
-                        console.log(`✅ Teacher ${disconnectedTeacher} marked as inactive`);
+                        console.log(`✅ Teacher ${disconnectedEmail} marked as inactive`);
                     }
 
-                    // Remove teacher from activeTeachers
-                    delete activeTeachers[disconnectedTeacher];
+                    // Clean up the reference
+                    delete activeTeachers[disconnectedEmail];
                     console.log("🟢 Active teachers after removal:", Object.keys(activeTeachers));
 
-                    // Notify all clients
+                    // Push update to all clients
                     sendUpdatedList();
                 }
             );

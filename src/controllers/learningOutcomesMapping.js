@@ -187,7 +187,6 @@ const updateLearningOutcomeMapping = async (req, res) => {
             return res.status(404).json({ error: "No students found in students_records for the given filters." });
         }
 
-        // ✅ Changed here to wrap each student in an object with key `student_id`
         const studentIds = studentRows.map(row => ({ student_id: row.student }));
 
         const inputAcIds = data.map(item => item.ac_id);
@@ -202,7 +201,6 @@ const updateLearningOutcomeMapping = async (req, res) => {
 
         let priorityChanged = false;
 
-        // Track changes to priorities
         for (const item of data) {
             const { ac_id, priority } = item;
             const existingPriority = currentPriorityMap.get(ac_id);
@@ -216,13 +214,15 @@ const updateLearningOutcomeMapping = async (req, res) => {
             }
         }
 
-        // ⚠️ Always recalculate, regardless of change
         let allWarnings = [];
-        const loWarnings = await recalculateLOScore(connection, lo_id, studentIds, data);
+
+        // ✅ Recalculate LO score (quarter passed)
+        const loWarnings = await recalculateLOScore(connection, lo_id, studentIds, data, quarter);
         allWarnings.push(...loWarnings);
 
+        // ✅ Recalculate RO scores (quarter passed)
         for (const ro_id of roIds) {
-            const roWarnings = await recalculateROScore(connection, ro_id, studentIds, data);
+            const roWarnings = await recalculateROScore(connection, ro_id, studentIds, data, quarter);
             allWarnings.push(...roWarnings);
         }
 

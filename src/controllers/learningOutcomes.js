@@ -127,6 +127,7 @@ const updateLearningOutcome = async (req, res) => {
     const { year, quarter, classname, subject } = req.headers;
     const { name, ro_id, priority } = req.body;
 
+    // Validation
     if (!id || !year || !quarter || !classname || !subject) {
         return res.status(400).json({
             message: "Missing required fields: year, quarter, class, subject (headers) or LO id (params)."
@@ -140,10 +141,11 @@ const updateLearningOutcome = async (req, res) => {
     }
 
     const connection = await db.getConnection();
+
     try {
         await connection.beginTransaction();
 
-        // Validate if LO exists
+        // Check if LO exists
         const [existingLO] = await connection.execute(
             `SELECT id FROM learning_outcomes WHERE id = ? AND year = ? AND quarter = ? AND class = ? AND subject = ?`,
             [id, year, quarter, classname, subject]
@@ -153,7 +155,7 @@ const updateLearningOutcome = async (req, res) => {
             return res.status(404).json({ message: "Learning outcome not found for the given filters." });
         }
 
-        // Update LO Name if provided
+        // Update LO name
         if (name) {
             await connection.execute(
                 `UPDATE learning_outcomes SET name = ? WHERE id = ?`,
@@ -162,15 +164,17 @@ const updateLearningOutcome = async (req, res) => {
         }
 
         // Update RO-LO mapping if provided
-        if (ro_id) {
+        if (ro_id && Array.isArray(ro_id)) {
             await connection.execute(`DELETE FROM ro_lo_mapping WHERE lo = ?`, [id]);
 
             const mappingQuery = `INSERT INTO ro_lo_mapping (ro, lo, priority) VALUES ?`;
             const mappingValues = ro_id.map(ro => [ro, id, priority || null]);
+
             await connection.query(mappingQuery, [mappingValues]);
 
+            // Recalculate RO Scores and pass quarter
             for (const ro of ro_id) {
-                await recalculateROScore(connection, ro);
+                await recalculateROScore(connection, ro, quarter); // ✅ Quarter passed here
             }
         }
 
@@ -183,6 +187,7 @@ const updateLearningOutcome = async (req, res) => {
         connection.release();
     }
 };
+
 
 // // Function to Recalculate RO Scores when mappings change
 // const recalculateROScore = async (connection, roId) => {
@@ -207,13 +212,17 @@ const updateLearningOutcome = async (req, res) => {
 //         );
 //     }
 // };
-
 const removeLearningOutcome = async (req, res) => {
     const { id } = req.query;
+    const { classname, section, year, quarter } = req.headers;
 
     if (!id) {
         console.log("[DEBUG] Missing LO ID");
         return res.status(400).json({ message: "Missing LO ID." });
+    }
+
+    if (!classname || !section || !year || !quarter) {
+        return res.status(400).json({ message: "Missing required headers: classname, section, year, or quarter." });
     }
 
     const connection = await db.getConnection();
@@ -259,7 +268,7 @@ const removeLearningOutcome = async (req, res) => {
         let allWarnings = [];
         for (const ro_id of roIds) {
             console.log(`[DEBUG] Recalculating RO Score for RO ID: ${ro_id}`);
-            const warnings = await recalculateROScore(connection, ro_id);
+            const warnings = await recalculateROScore(connection, ro_id, classname, section, year, quarter); // ✅ Passed quarter
             if (warnings?.length > 0) {
                 console.log(`[DEBUG] Warnings for RO ${ro_id}:`, warnings);
                 allWarnings.push(...warnings);

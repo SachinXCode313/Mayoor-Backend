@@ -21,7 +21,7 @@ const getAssessmentCriteriaScores = async (req, res) => {
             AND sr.section = ?
             AND ac.quarter = ?
             ORDER BY sr.student;
-        `;
+        `;  
 
         const [results] = await db.query(query, [ac_id, classname, year, section, quarter]);
 
@@ -78,13 +78,11 @@ const updateAssessmentCriteriaScore = async (req, res) => {
         res.status(500).json({ error: "Internal Server Error" });
     }
 };
-
 const recalculateAcScores = async (ac_id, year, quarter, classname, section, scores) => {
     const connection = await db.getConnection();
     await connection.beginTransaction();
 
     try {
-
         if (!ac_id || !scores || !Array.isArray(scores) || scores.length === 0) {
             throw new Error("ac_id and valid scores array are required.");
         }
@@ -92,21 +90,23 @@ const recalculateAcScores = async (ac_id, year, quarter, classname, section, sco
         if (!year || !quarter || !classname || !section) {
             throw new Error("year, quarter, classname, and section are required.");
         }
+
         // Fetch max_marks for the assessment criteria
         const [criteriaRows] = await connection.query(
             "SELECT max_marks FROM assessment_criterias WHERE id = ? AND quarter = ? AND year = ? AND class = ?",
-            [ac_id, quarter, year, classname] // Check if 'class' should be 'classname'
+            [ac_id, quarter, year, classname]
         );
 
         const max_marks = criteriaRows[0]?.max_marks;
         if (!max_marks) {
             throw new Error("Max marks not set for this assessment criteria.");
         }
+
         // Clean scores: remove any completely null or invalid objects
         scores = scores.filter(score => score !== null && typeof score === "object");
 
         let validScores = scores
-            .filter(({ student_id }) => student_id) // Ensure student_id exists
+            .filter(({ student_id }) => student_id)
             .map(({ student_id, obtained_marks }) => {
                 if (obtained_marks === null || isNaN(obtained_marks)) {
                     return [student_id, ac_id, null];
@@ -141,7 +141,7 @@ const recalculateAcScores = async (ac_id, year, quarter, classname, section, sco
         if (loMappings.length > 0) {
             for (const { lo, priority } of loMappings) {
                 if (priority) {
-                    const result = await recalculateLOScore(connection, lo, scores);
+                    await recalculateLOScore(connection, lo, scores); // assuming this already accepts scores
                 } else {
                     console.warn(`Skipping LO (${lo}): No priority assigned.`);
                 }
@@ -153,11 +153,12 @@ const recalculateAcScores = async (ac_id, year, quarter, classname, section, sco
             "SELECT ro, priority FROM ro_lo_mapping WHERE lo IN (SELECT lo FROM lo_ac_mapping WHERE ac = ?)",
             [ac_id]
         );
-        console.log("working...")
+
+        console.log("working...");
         if (roMappings.length > 0) {
             for (const { ro, priority } of roMappings) {
                 if (priority) {
-                    const result = await recalculateROScore(connection, ro);
+                    await recalculateROScore(connection, ro, quarter); // ✅ quarter passed here
                 } else {
                     console.warn(`Skipping RO (${ro}): No priority assigned.`);
                 }
