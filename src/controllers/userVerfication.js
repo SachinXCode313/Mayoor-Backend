@@ -58,6 +58,7 @@ const verifyUser = async (req, res) => {
     return res.status(200).json({
       success: true,
       message: "User verified",
+      teacherId,
       role,
       user: decodedToken,
       allocations: allocations.map((a) => ({
