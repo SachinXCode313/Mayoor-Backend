@@ -154,7 +154,7 @@ const addAssessmentCriteria = async (req, res) => {
 const updateAssessmentCriteria = async (req, res) => {
     const { id } = req.query; // AC ID
     const { name, max_marks, lo_id } = req.body;
-    const { quarter } = req.headers;
+    const { quarter,section } = req.headers;
 
     if (!id || !name || !max_marks || !lo_id || !Array.isArray(lo_id)) {
         return res.status(400).json({
@@ -167,7 +167,7 @@ const updateAssessmentCriteria = async (req, res) => {
 
     try {
         const [currentAC] = await connection.execute(
-            "SELECT max_marks, year, quarter AS db_quarter, class, section FROM assessment_criterias WHERE id = ?",
+            "SELECT max_marks, year, quarter AS db_quarter, class FROM assessment_criterias WHERE id = ?",
             [id]
         );
 
@@ -175,7 +175,7 @@ const updateAssessmentCriteria = async (req, res) => {
             return res.status(404).json({ message: 'Assessment criterion not found.' });
         }
 
-        const { max_marks: currentMaxMarks, year, db_quarter, class: classname, section } = currentAC[0];
+        const { max_marks: currentMaxMarks, year, db_quarter, class: classname} = currentAC[0];
         const effectiveQuarter = quarter || db_quarter;
 
         const [existingLOs] = await connection.execute(
