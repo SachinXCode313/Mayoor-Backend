@@ -12,18 +12,21 @@ const getAssessmentCriteriaScores = async (req, res) => {
     try {
         const query = `
             SELECT sr.student, s.name AS student_name, acs.value
-            FROM students_records sr
+            FROM (
+                SELECT student,
+                    ROW_NUMBER() OVER (ORDER BY student) AS student_position
+                FROM students_records
+                WHERE class = ? AND year = ? AND section = ?
+            ) sr
             INNER JOIN students s ON sr.student = s.id
             LEFT JOIN ac_scores acs ON sr.student = acs.student AND acs.ac = ?
-            LEFT JOIN assessment_criterias ac ON acs.ac = ac.id
-            WHERE sr.class = ?
-            AND sr.year = ?
-            AND sr.section = ?
-            AND ac.quarter = ?
-            ORDER BY sr.student;
+            LEFT JOIN assessment_criterias ac ON acs.ac = ac.id AND ac.quarter = ?
+            ORDER BY sr.student_position;
+
         `;  
 
-        const [results] = await db.query(query, [ac_id, classname, year, section, quarter]);
+        // Note the parameter order here
+        const [results] = await db.query(query, [classname, year, section, ac_id, quarter]);
 
         if (results.length === 0) {
             return res.status(404).json({ message: "No assessment scores found for the given filters." });
@@ -41,6 +44,7 @@ const getAssessmentCriteriaScores = async (req, res) => {
         res.status(500).json({ message: "Server error while fetching assessment scores", error: err.message });
     }
 };
+
 
 // Set Assessment Criteria Scores (POST)
 const setAssessmentCriteriaScore = async (req, res) => {

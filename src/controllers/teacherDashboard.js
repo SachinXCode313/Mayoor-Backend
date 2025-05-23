@@ -46,6 +46,9 @@ const getTeacherDashboard = async (req, res) => {
                       AND ac.subject = ?
                 GROUP BY ac.subject;
             `, [year, class_id, section, quarter, subject]);
+
+            console.log("AC Scores:", acScores); // Debugging line
+            
             // LO Average Query (Fixed)
             const [loScores] = await db.query(`
                 SELECT SUM(ls.value) / COUNT(ls.value) AS lo_avg
