@@ -1,5 +1,6 @@
 import db from "../config/db.js";
 import { recalculateROScore } from "./reportOutcomesMapping.js";
+
 const recalculateLOScore = async (connection, lo_id, studentIds) => {
     try {
         let warnings = [];
@@ -10,46 +11,52 @@ const recalculateLOScore = async (connection, lo_id, studentIds) => {
             "SELECT ac, priority FROM lo_ac_mapping WHERE lo = ?",
             [lo_id]
         );
-        
-        if (mappings.length === 0) {
-            warnings.push(`No LO-AC mappings found for LO ID: ${lo_id}`);
-            return warnings
+
+        if (!mappings || mappings.length === 0) {
+            warnings.push(`No LO-AC mappings found for LO ID: ${lo_id}. Setting LO scores to 0.`);
+            if (studentIds && Array.isArray(studentIds)) {
+                for (const studentObj of studentIds) {
+                    if (studentObj && studentObj.student_id) {
+                        await connection.query(
+                            "INSERT INTO lo_scores (lo, student, value) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE value = ?",
+                            [lo_id, studentObj.student_id, 0, 0]
+                        );
+                    }
+                }
+            }
+            return warnings;
         }
 
-        // Calculate weight for each priority
-        let hCount = 0, mCount = 0, lCount = 0;
-        mappings.forEach(({ priority }) => {
-            if (priority === 'h') hCount++;
-            else if (priority === 'm') mCount++;
-            else if (priority === 'l') lCount++;
-        });
+        // Calculate total weight using priorities
+        const totalPriorityWeight = mappings.reduce((sum, { priority }) => {
+            return sum + (priorityValues[priority] || 0);
+        }, 0);
 
-        const totalWeight = (hCount * priorityValues.h) + (mCount * priorityValues.m) + (lCount * priorityValues.l);
-        if (totalWeight === 0) {
-            warnings.push(`Total weight is 0 for LO ID: ${lo_id}, skipping recalculation.`);
-            return warnings// Avoid division by zero
+        if (totalPriorityWeight === 0) {
+            warnings.push(`Total priority weight is 0 for LO ID: ${lo_id}. Skipping recalculation.`);
+            return warnings;
         }
 
-        const hWeight = (priorityValues.h ) / totalWeight;
-        const mWeight = (priorityValues.m ) / totalWeight;
-        const lWeight = (priorityValues.l ) / totalWeight ;
-        // Update weights in the lo_ac_mapping table
-        for (const { ac, priority } of mappings) {
-            let weight = 0;
-            if (priority === 'h') weight = hWeight;
-            else if (priority === 'm') weight = mWeight;
-            else if (priority === 'l') weight = lWeight;
+        // Calculate individual weights for each mapping
+        const weights = mappings.map(({ ac, priority }) => ({
+            ac,
+            weight: (priorityValues[priority] || 0) / totalPriorityWeight
+        }));
 
-            // Update the weight column for each mapping
+        // Update lo_ac_mapping weights
+        for (const { ac, weight } of weights) {
             await connection.query(
                 "UPDATE lo_ac_mapping SET weight = ? WHERE lo = ? AND ac = ?",
                 [weight, lo_id, ac]
             );
         }
+
         if (!studentIds || !Array.isArray(studentIds) || studentIds.length === 0) {
             warnings.push(`No student IDs provided for LO ID: ${lo_id}. Cannot recalculate scores.`);
-            return warnings
+            return warnings;
         }
+
+        // Check if any AC scores exist
         let hasScores = false;
         for (const { ac } of mappings) {
             const [scoreCheck] = await connection.query(
@@ -63,27 +70,21 @@ const recalculateLOScore = async (connection, lo_id, studentIds) => {
         }
 
         if (!hasScores) {
-            warnings.push(`Priority set for LO ${lo_id}, but no AC scores found. Please add AC scores.`);
-            return warnings
+            warnings.push(`LO ${lo_id} has mappings, but no AC scores found. Please add AC scores.`);
+            return warnings;
         }
+
+        // Recalculate LO scores for each student
         for (const studentObj of studentIds) {
             if (!studentObj || !studentObj.student_id) {
-                console.error(`Invalid student object:`, studentObj);
-                continue; // Skip this iteration if student_id is missing
+                warnings.push(`Invalid student object: ${JSON.stringify(studentObj)}`);
+                continue;
             }
-            
+
             const student_id = studentObj.student_id;
             let weightedSum = 0;
 
-            console.log(`Processing student ID: ${student_id}`);
-
-            for (const { ac, priority } of mappings) {
-                let weight = 0;
-                if (priority === 'h') weight = hWeight;
-                else if (priority === 'm') weight = mWeight;
-                else if (priority === 'l') weight = lWeight;
-
-                // Fetch the AC score for the student
+            for (const { ac, weight } of weights) {
                 const [acScoreRows] = await connection.query(
                     "SELECT value FROM ac_scores WHERE ac = ? AND student = ?",
                     [ac, student_id]
@@ -97,26 +98,21 @@ const recalculateLOScore = async (connection, lo_id, studentIds) => {
                 }
             }
 
-            // If weightedSum is still 0, skip inserting a null value
-            if (weightedSum === 0) {
-                warnings.push(`Skipping LO score insert for student ${student_id} due to no valid AC scores.`);
-                continue;
-            }
-
-            // Calculate LO score
-            const loScore = weightedSum;
-
-            // Insert or update LO Score
+            // If weighted sum is 0, still insert LO score as 0
             await connection.query(
                 "INSERT INTO lo_scores (lo, student, value) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE value = ?",
-                [lo_id, student_id, loScore, loScore]
+                [lo_id, student_id, weightedSum, weightedSum]
             );
         }
-        return warnings
+
+        return warnings;
+
     } catch (error) {
         console.error("Error recalculating LO score:", error);
+        return [`Error occurred while recalculating LO score for LO ID: ${lo_id}`];
     }
 };
+
 
 // Get Learning Outcomes Mapping
 const getLearningOutcomesMapping = async (req, res) => {

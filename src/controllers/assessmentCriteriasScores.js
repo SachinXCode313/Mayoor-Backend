@@ -162,7 +162,8 @@ const recalculateAcScores = async (ac_id, year, quarter, classname, section, sco
         if (roMappings.length > 0) {
             for (const { ro, priority } of roMappings) {
                 if (priority) {
-                    await recalculateROScore(connection, ro, quarter); // ✅ quarter passed here
+                    console.log(quarter)
+                    await recalculateROScore(connection, ro, classname, section, year, quarter);
                 } else {
                     console.warn(`Skipping RO (${ro}): No priority assigned.`);
                 }

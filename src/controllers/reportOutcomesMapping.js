@@ -1,27 +1,24 @@
 import db from "../config/db.js";
 
-const recalculateROScore = async (connection, ro_id, classname = null, section = null, year = null, quarter = null) => {
+const recalculateROScore = async (connection, ro_id, classname = null, section = null, year = null, quarter) => {
     try {
         const warnings = [];
-
+        console.log(quarter)
         if (!quarter) {
             const msg = `Missing required parameter: 'quarter'. Please provide a quarter (e.g., 'Q1', 'Q2', etc.).`;
             console.warn(`[WARNING] ${msg}`);
             return [msg];
         }
 
-        const priorityValues = { h: 0.5, m: 0.3, l: 0.2 };
-
         // Step 1: Fetch valid LO mappings with scores
         const [mappings] = await connection.query(
             `SELECT DISTINCT rlm.lo, rlm.priority 
              FROM ro_lo_mapping rlm
              JOIN lo_scores ls ON rlm.lo = ls.lo
-             JOIN students_records s ON ls.student = s.id
+             JOIN students_records s ON ls.student = s.student
              WHERE rlm.ro = ?
-             AND s.class = ? AND s.section = ? AND s.year = ?
-             AND ls.quarter = ?`,
-            [ro_id, classname, section, year, quarter]
+             AND class = ? AND section = ? AND year = ? `,
+            [ro_id, classname, section, year]
         );
 
         console.log(`[DEBUG] Filtered valid LO mappings for RO ${ro_id} in Q${quarter}: ${mappings.length}`);
@@ -32,7 +29,7 @@ const recalculateROScore = async (connection, ro_id, classname = null, section =
                  WHERE ro = ?
                  AND quarter = ?
                  AND student IN (
-                    SELECT id FROM students_records
+                    SELECT student FROM students_records
                     WHERE class = ? AND section = ? AND year = ?
                  )`,
                 [ro_id, quarter, classname, section, year]
@@ -45,11 +42,10 @@ const recalculateROScore = async (connection, ro_id, classname = null, section =
         const [studentRows] = await connection.query(
             `SELECT DISTINCT ls.student 
              FROM lo_scores ls
-             JOIN students_records s ON ls.student = s.id
+             JOIN students_records s ON ls.student = s.student
              WHERE ls.lo IN (${mappings.map(() => '?').join(',')})
-             AND s.class = ? AND s.section = ? AND s.year = ?
-             AND ls.quarter = ?`,
-            [...mappings.map(row => row.lo), classname, section, year, quarter]
+             AND s.class = ? AND s.section = ? AND s.year = ?`,
+            [...mappings.map(row => row.lo), classname, section, year]
         );
 
         if (studentRows.length === 0) {
@@ -75,7 +71,7 @@ const recalculateROScore = async (connection, ro_id, classname = null, section =
                 `DELETE FROM ro_scores 
                  WHERE ro = ? AND quarter = ?
                  AND student IN (
-                    SELECT id FROM students_records
+                    SELECT student FROM students_records
                     WHERE class = ? AND section = ? AND year = ?
                  )`,
                 [ro_id, quarter, classname, section, year]
@@ -97,10 +93,14 @@ const recalculateROScore = async (connection, ro_id, classname = null, section =
                 const weight = priority === 'h' ? hWeight :
                                priority === 'm' ? mWeight :
                                priority === 'l' ? lWeight : 0;
-
+                
+                await connection.query(
+                "UPDATE ro_lo_mapping SET weight = ? WHERE ro = ? AND lo = ?",
+                [weight, ro_id, lo]
+            );               
                 const [loScoreRows] = await connection.query(
-                    "SELECT value FROM lo_scores WHERE lo = ? AND student = ? AND quarter = ?",
-                    [lo, student_id, quarter]
+                    "SELECT value FROM lo_scores WHERE lo = ? AND student = ?",
+                    [lo, student_id]
                 );
 
                 if (loScoreRows.length > 0) {
