@@ -82,6 +82,7 @@ const updateAssessmentCriteriaScore = async (req, res) => {
         res.status(500).json({ error: "Internal Server Error" });
     }
 };
+
 const recalculateAcScores = async (ac_id, year, quarter, classname, section, scores) => {
     const connection = await db.getConnection();
     await connection.beginTransaction();

@@ -174,11 +174,40 @@ const updateReportOutcomeMapping = async (req, res) => {
             return res.status(404).json({ error: "Invalid ro_id provided." });
         }
 
+        const inputLoIds = data.map(item => item.lo_id);
+
+        // ✅ STEP 1: Find if any of these LO IDs were previously mapped to other ROs
+        const [oldMappings] = await connection.query(
+            "SELECT ro, lo FROM ro_lo_mapping WHERE lo IN (?) AND ro != ?",
+            [inputLoIds, ro_id]
+        );
+
+        const roToRemovedLos = {};
+        for (const row of oldMappings) {
+            if (!roToRemovedLos[row.ro]) roToRemovedLos[row.ro] = [];
+            roToRemovedLos[row.ro].push(row.lo);
+        }
+
+        // ✅ STEP 2: Delete LO mappings from old ROs
+        for (const oldRoId in roToRemovedLos) {
+            const removedLos = roToRemovedLos[oldRoId];
+            await connection.query(
+                "DELETE FROM ro_lo_mapping WHERE ro = ? AND lo IN (?)",
+                [oldRoId, removedLos]
+            );
+        }
+
+        // ✅ STEP 3: Recalculate affected old RO scores
+        for (const oldRoId in roToRemovedLos) {
+            const oldWarnings = await recalculateROScore(connection, oldRoId);
+            warnings.push(...oldWarnings);
+        }
+
+        // ✅ STEP 4: Proceed with existing logic
         const [existingMappings] = await connection.query(
             "SELECT lo, priority FROM ro_lo_mapping WHERE ro = ?",
             [ro_id]
         );
-
         const existingMappingMap = new Map(existingMappings.map(row => [row.lo, row.priority]));
 
         let mappingChanged = false;
