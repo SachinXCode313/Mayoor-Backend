@@ -167,7 +167,7 @@ const updateAssessmentCriteria = async (req, res) => {
 
     try {
         const [currentAC] = await connection.execute(
-            "SELECT max_marks, year, quarter AS db_quarter, class, section FROM assessment_criterias WHERE id = ?",
+            "SELECT max_marks, year, quarter AS db_quarter, class FROM assessment_criterias WHERE id = ?",
             [id]
         );
 
