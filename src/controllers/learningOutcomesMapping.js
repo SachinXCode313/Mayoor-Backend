@@ -1,5 +1,6 @@
 import db from "../config/db.js";
 import { recalculateROScore } from "./reportOutcomesMapping.js";
+
 const recalculateLOScore = async (connection, lo_id, studentIds) => {
     try {
         let warnings = [];
@@ -218,11 +219,11 @@ const updateLearningOutcomeMapping = async (req, res) => {
 
         let allWarnings = [];
 
-        // Recalculate current LO scores
+        // Recalculate for current LO
         const loWarnings = await recalculateLOScore(connection, lo_id, studentIds);
         allWarnings.push(...loWarnings);
 
-        // Recalculate for LOs whose ACs were removed
+        // Process old LOs affected by AC reassignment
         for (const oldLoId in loToRemovedAcs) {
             const [remainingMappings] = await connection.query(
                 "SELECT ac FROM lo_ac_mapping WHERE lo = ?",
@@ -230,28 +231,36 @@ const updateLearningOutcomeMapping = async (req, res) => {
             );
 
             if (remainingMappings.length === 0) {
+                // Delete LO scores
                 await connection.query(
                     "DELETE FROM lo_scores WHERE lo = ? AND student IN (?)",
                     [oldLoId, studentIds.map(s => s.student_id)]
                 );
                 allWarnings.push(`LO ${oldLoId} has no remaining ACs. LO scores deleted.`);
+
+                // Delete RO-LO mapping
+                await connection.query(
+                    "DELETE FROM ro_lo_mapping WHERE lo = ?",
+                    [oldLoId]
+                );
+                allWarnings.push(`RO-LO mapping for LO ${oldLoId} deleted as it has no ACs.`);
             } else {
                 const oldLoWarnings = await recalculateLOScore(connection, oldLoId, studentIds);
                 allWarnings.push(...oldLoWarnings);
             }
 
-            // Recalculate RO scores linked to previous LOs
             const [oldRoRows] = await connection.query(
                 "SELECT ro FROM ro_lo_mapping WHERE lo = ?",
                 [oldLoId]
             );
+
             for (const row of oldRoRows) {
-                const oldRoWarnings = await recalculateROScore(connection, row.ro, classname,section,year,quarter);
+                const oldRoWarnings = await recalculateROScore(connection, row.ro, classname, section, year, quarter);
                 allWarnings.push(...oldRoWarnings);
             }
         }
 
-        // Recalculate RO scores for current LO's ROs
+        // Recalculate for current RO(s)
         for (const ro_id of roIds) {
             const roWarnings = await recalculateROScore(connection, ro_id, classname, section, year, quarter);
             allWarnings.push(...roWarnings);

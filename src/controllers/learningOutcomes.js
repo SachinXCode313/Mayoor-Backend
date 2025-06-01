@@ -121,97 +121,107 @@ const priorityValues = {
     m: 0.3,
     l: 0.2,
 };
-
 const updateLearningOutcome = async (req, res) => {
-    const { id } = req.query;
-    const { year, quarter, classname, subject } = req.headers;
-    const { name, ro_id, priority } = req.body;
-
-    // Validation
-    if (!id || !year || !quarter || !classname || !subject) {
-        return res.status(400).json({
-            message: "Missing required fields: year, quarter, class, subject (headers) or LO id (params)."
-        });
-    }
-
-    if (!name && (!ro_id || !Array.isArray(ro_id))) {
-        return res.status(400).json({
-            message: "At least one field (name or ro_id array) is required to update."
-        });
-    }
-
     const connection = await db.getConnection();
+    await connection.beginTransaction();
 
     try {
-        await connection.beginTransaction();
+        const { id } = req.query;
+        const { year, quarter, classname, section, subject } = req.headers;
+        const { name, ro_id } = req.body;
+
+        // Validation
+        if (!id || !year || !quarter || !classname || !section || !subject) {
+            return res.status(400).json({
+                error: "Missing required parameters: id (query) and headers year, quarter, classname, section, subject."
+            });
+        }
+
+        if (!name && (!ro_id || !Array.isArray(ro_id))) {
+            return res.status(400).json({
+                error: "Either 'name' or 'ro_id' array must be provided in request body."
+            });
+        }
 
         // Check if LO exists
-        const [existingLO] = await connection.execute(
-            `SELECT id FROM learning_outcomes WHERE id = ? AND year = ? AND quarter = ? AND class = ? AND subject = ?`,
-            [id, year, quarter, classname, subject]
-        );
-
+        const [existingLO] = await connection.query("SELECT * FROM learning_outcomes WHERE id = ?", [id]);
         if (existingLO.length === 0) {
-            return res.status(404).json({ message: "Learning outcome not found for the given filters." });
+            return res.status(404).json({ error: `Learning Outcome with id ${id} not found.` });
         }
 
-        // Update LO name
+        // Update LO name if provided
         if (name) {
-            await connection.execute(
-                `UPDATE learning_outcomes SET name = ? WHERE id = ?`,
-                [name, id]
-            );
+            await connection.query("UPDATE learning_outcomes SET name = ? WHERE id = ?", [name, id]);
         }
 
-        // Update RO-LO mapping if provided
+        // If ro_id array provided, update RO mappings for this LO
         if (ro_id && Array.isArray(ro_id)) {
-            await connection.execute(`DELETE FROM ro_lo_mapping WHERE lo = ?`, [id]);
+            // Validate all RO IDs exist
+            const [validROs] = await connection.query(
+                `SELECT id FROM report_outcomes WHERE id IN (?)`,
+                [ro_id]
+            );
+            const validROIds = validROs.map(r => r.id);
+            for (const rid of ro_id) {
+                if (!validROIds.includes(rid)) {
+                    return res.status(400).json({ error: `Invalid RO id: ${rid}` });
+                }
+            }
 
-            const mappingQuery = `INSERT INTO ro_lo_mapping (ro, lo, priority) VALUES ?`;
-            const mappingValues = ro_id.map(ro => [ro, id, priority || null]);
+            // Delete existing mappings for this LO (to avoid duplicates)
+            await connection.query("DELETE FROM ro_lo_mapping WHERE lo = ?", [id]);
 
-            await connection.query(mappingQuery, [mappingValues]);
-
-            // Recalculate RO Scores and pass quarter
-            for (const ro of ro_id) {
-                await recalculateROScore(connection, ro, quarter); // ✅ Quarter passed here
+            // Insert new mappings with default priority 'm' and weight 0.3
+            for (const rid of ro_id) {
+                await connection.query(
+                    `INSERT INTO ro_lo_mapping (ro, lo, priority, weight)
+                     VALUES (?, ?, 'm', 0.3)
+                     ON DUPLICATE KEY UPDATE priority = VALUES(priority), weight = VALUES(weight)`,
+                    [rid, id]
+                );
             }
         }
 
+        // After updating LO and mappings, recalculate RO scores for affected ROs
+        // Combine all affected RO ids: those in ro_id (if provided) plus old ROs linked to this LO
+        const affectedROsSet = new Set();
+
+        if (ro_id && Array.isArray(ro_id)) {
+            ro_id.forEach(rid => affectedROsSet.add(rid));
+        }
+
+        // Find all ROs currently mapped to this LO
+        const [currentROMappings] = await connection.query(
+            "SELECT DISTINCT ro FROM ro_lo_mapping WHERE lo = ?",
+            [id]
+        );
+        currentROMappings.forEach(row => affectedROsSet.add(row.ro));
+
+        const affectedROs = Array.from(affectedROsSet);
+
+        let allWarnings = [];
+
+        for (const roId of affectedROs) {
+            const warnings = await recalculateROScore(connection, roId, classname, section, year, quarter);
+            allWarnings = allWarnings.concat(warnings);
+        }
+
         await connection.commit();
-        res.status(200).json({ message: "Learning Outcome updated successfully." });
+
+        res.status(200).json({
+            message: "Learning Outcome updated and RO scores recalculated successfully.",
+            warnings: allWarnings
+        });
+
     } catch (error) {
         await connection.rollback();
-        res.status(500).json({ error: error.message });
+        console.error("Error in updateLearningOutcome:", error);
+        res.status(500).json({ error: "Internal Server Error", details: error.message });
     } finally {
         connection.release();
     }
 };
 
-
-// // Function to Recalculate RO Scores when mappings change
-// const recalculateROScore = async (connection, roId) => {
-//     const [studentScores] = await connection.execute(
-//         `SELECT ls.student, SUM(ls.value * CASE 
-//             WHEN rlm.priority = 'h' THEN 0.5
-//             WHEN rlm.priority = 'm' THEN 0.3
-//             WHEN rlm.priority = 'l' THEN 0.2
-//             ELSE 0 END) AS total_score
-//          FROM lo_scores ls
-//          JOIN ro_lo_mapping rlm ON ls.lo = rlm.lo
-//          WHERE rlm.ro = ?
-//          GROUP BY ls.student`,
-//         [roId]
-//     );
-
-//     for (const { student, total_score } of studentScores) {
-//         await connection.execute(
-//             `INSERT INTO ro_scores (student, ro, value) VALUES (?, ?, ?)
-//              ON DUPLICATE KEY UPDATE value = VALUES(value)`,
-//             [student, roId, total_score]
-//         );
-//     }
-// };
 const removeLearningOutcome = async (req, res) => {
     const { id } = req.query;
     const { classname, section, year, quarter } = req.headers;

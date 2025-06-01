@@ -49,9 +49,20 @@ const recalculateROScore = async (connection, ro_id, classname = null, section =
         );
 
         if (studentRows.length === 0) {
-            warnings.push(`No students found for RO ${ro_id} in Q${quarter}.`);
+            const [deleteResult] = await connection.query(
+                `DELETE FROM ro_scores 
+                 WHERE ro = ?
+                 AND quarter = ?
+                 AND student IN (
+                    SELECT student FROM students_records
+                    WHERE class = ? AND section = ? AND year = ?
+                 )`,
+                [ro_id, quarter, classname, section, year]
+            );
+            warnings.push(`No valid LO scores found for RO ${ro_id} in Q${quarter}. Deleted ${deleteResult.affectedRows} RO scores.`);
             return warnings;
         }
+        
 
         const studentIds = studentRows.map(row => row.student);
 
@@ -136,9 +147,6 @@ const recalculateROScore = async (connection, ro_id, classname = null, section =
     }
 };
 
-
-
-// **Main Function: Update Report Outcome Mapping**
 const updateReportOutcomeMapping = async (req, res) => {
     const connection = await db.getConnection();
     await connection.beginTransaction();
@@ -150,6 +158,7 @@ const updateReportOutcomeMapping = async (req, res) => {
         const { ro_id } = req.query;
         const { data } = req.body;
 
+        // 🛡️ Validate inputs
         if (!ro_id) {
             return res.status(400).json({ error: "Missing required parameter: ro_id." });
         }
@@ -158,17 +167,27 @@ const updateReportOutcomeMapping = async (req, res) => {
             return res.status(400).json({ error: "Invalid data format. Expected an array of objects with lo_id and priority." });
         }
 
-        const priorityValues = { h: 0.5, m: 0.3, l: 0.2 };
-        const validPriorities = Object.keys(priorityValues);
+        // ✅ Get headers
+        const classname = req.headers.classname;
+        const section = req.headers.section;
+        const year = req.headers.year;
+        const quarter = req.headers.quarter;
 
+        if (!classname || !section || !year || !quarter) {
+            return res.status(400).json({ error: "Missing required headers: classname, section, year, or quarter." });
+        }
+
+        // ✅ Validate priority
+        const validPriorities = ["h", "m", "l"];
         for (const item of data) {
             if (!validPriorities.includes(item.priority)) {
                 return res.status(400).json({
-                    error: `Invalid priority '${item.priority}'. Must be one of ${validPriorities.join(", ")}.`
+                    error: `Invalid priority '${item.priority}'. Must be one of h, m, l.`
                 });
             }
         }
 
+        // ✅ Check RO exists
         const [roRows] = await connection.query("SELECT id FROM report_outcomes WHERE id = ?", [ro_id]);
         if (roRows.length === 0) {
             return res.status(404).json({ error: "Invalid ro_id provided." });
@@ -176,7 +195,7 @@ const updateReportOutcomeMapping = async (req, res) => {
 
         const inputLoIds = data.map(item => item.lo_id);
 
-        // ✅ STEP 1: Find if any of these LO IDs were previously mapped to other ROs
+        // ✅ Remove LO from old mappings
         const [oldMappings] = await connection.query(
             "SELECT ro, lo FROM ro_lo_mapping WHERE lo IN (?) AND ro != ?",
             [inputLoIds, ro_id]
@@ -188,22 +207,19 @@ const updateReportOutcomeMapping = async (req, res) => {
             roToRemovedLos[row.ro].push(row.lo);
         }
 
-        // ✅ STEP 2: Delete LO mappings from old ROs
         for (const oldRoId in roToRemovedLos) {
-            const removedLos = roToRemovedLos[oldRoId];
             await connection.query(
                 "DELETE FROM ro_lo_mapping WHERE ro = ? AND lo IN (?)",
-                [oldRoId, removedLos]
+                [oldRoId, roToRemovedLos[oldRoId]]
             );
         }
 
-        // ✅ STEP 3: Recalculate affected old RO scores
         for (const oldRoId in roToRemovedLos) {
-            const oldWarnings = await recalculateROScore(connection, oldRoId);
+            const oldWarnings = await recalculateROScore(connection, oldRoId, classname, section, year, quarter);
             warnings.push(...oldWarnings);
         }
 
-        // ✅ STEP 4: Proceed with existing logic
+        // ✅ Fetch existing mappings
         const [existingMappings] = await connection.query(
             "SELECT lo, priority FROM ro_lo_mapping WHERE ro = ?",
             [ro_id]
@@ -212,9 +228,8 @@ const updateReportOutcomeMapping = async (req, res) => {
 
         let mappingChanged = false;
 
+        // ✅ Update new mappings
         for (const { lo_id, priority } of data) {
-            const weight = priorityValues[priority];
-
             const [loExists] = await connection.query(
                 "SELECT id FROM learning_outcomes WHERE id = ?", [lo_id]
             );
@@ -225,19 +240,20 @@ const updateReportOutcomeMapping = async (req, res) => {
 
             if (!existingMappingMap.has(lo_id)) {
                 await connection.query(
-                    "INSERT INTO ro_lo_mapping (ro, lo, priority, weight) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE priority = VALUES(priority), weight = VALUES(weight);",
-                    [ro_id, lo_id, priority, weight]
+                    "INSERT INTO ro_lo_mapping (ro, lo, priority) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE priority = VALUES(priority);",
+                    [ro_id, lo_id, priority]
                 );
                 mappingChanged = true;
             } else if (existingMappingMap.get(lo_id) !== priority) {
                 await connection.query(
-                    "UPDATE ro_lo_mapping SET priority = ?, weight = ? WHERE ro = ? AND lo = ?",
-                    [priority, weight, ro_id, lo_id]
+                    "UPDATE ro_lo_mapping SET priority = ? WHERE ro = ? AND lo = ?",
+                    [priority, ro_id, lo_id]
                 );
                 mappingChanged = true;
             }
         }
 
+        // ✅ Recalculate if needed
         let recalculationWarnings = [];
 
         if (mappingChanged) {
@@ -246,11 +262,15 @@ const updateReportOutcomeMapping = async (req, res) => {
                 FROM students_records sr
                 JOIN lo_scores ls ON sr.student = ls.student
                 JOIN ro_lo_mapping rlm ON ls.lo = rlm.lo
-                WHERE rlm.ro = ?;
-            `, [ro_id]);
+                WHERE rlm.ro = ?
+                  AND sr.class = ?
+                  AND sr.section = ?
+                  AND sr.year = ?
+               ;
+            `, [ro_id, classname, section, year, quarter]);
 
             if (studentRows.length > 0) {
-                recalculationWarnings = await recalculateROScore(connection, ro_id);
+                recalculationWarnings = await recalculateROScore(connection, ro_id, classname, section, year, quarter);
                 console.log("RO scores recalculated successfully.");
             } else {
                 warnings.push("No students found to recalculate RO scores.");

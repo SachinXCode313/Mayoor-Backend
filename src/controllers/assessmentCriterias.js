@@ -154,11 +154,17 @@ const addAssessmentCriteria = async (req, res) => {
 const updateAssessmentCriteria = async (req, res) => {
     const { id } = req.query; // AC ID
     const { name, max_marks, lo_id } = req.body;
-    const { quarter } = req.headers;
+    const { quarter, section } = req.headers;  // section from headers
 
     if (!id || !name || !max_marks || !lo_id || !Array.isArray(lo_id)) {
         return res.status(400).json({
             message: 'Missing or invalid required fields. Ensure id (params), name, max_marks, and lo_id (array in body) are provided.',
+        });
+    }
+
+    if (!section) {
+        return res.status(400).json({
+            message: 'Missing section in headers.',
         });
     }
 
@@ -170,12 +176,12 @@ const updateAssessmentCriteria = async (req, res) => {
             "SELECT max_marks, year, quarter AS db_quarter, class FROM assessment_criterias WHERE id = ?",
             [id]
         );
-
+        
         if (currentAC.length === 0) {
             return res.status(404).json({ message: 'Assessment criterion not found.' });
         }
 
-        const { max_marks: currentMaxMarks, year, db_quarter, class: classname, section } = currentAC[0];
+        const { max_marks: currentMaxMarks, year, db_quarter, class: classname } = currentAC[0];
         const effectiveQuarter = quarter || db_quarter;
 
         const [existingLOs] = await connection.execute(
@@ -190,8 +196,7 @@ const updateAssessmentCriteria = async (req, res) => {
             currentLOIds.length !== newLOIds.length ||
             !currentLOIds.every(lo => newLOIds.includes(lo));
 
-        const updateQuery = `UPDATE assessment_criterias SET name = ?, max_marks = ? WHERE id = ?`;
-        await connection.execute(updateQuery, [name, max_marks, id]);
+        await connection.execute(`UPDATE assessment_criterias SET name = ?, max_marks = ? WHERE id = ?`, [name, max_marks, id]);
 
         const [validLOs] = await connection.query(
             `SELECT id FROM learning_outcomes WHERE id IN (${lo_id.map(() => '?').join(',')}) 
@@ -209,27 +214,59 @@ const updateAssessmentCriteria = async (req, res) => {
 
         if (loMappingChanged) {
             await connection.execute(`DELETE FROM lo_ac_mapping WHERE ac = ?`, [id]);
-
+        
             const insertMappingQuery = `INSERT INTO lo_ac_mapping (lo, ac, priority, weight) VALUES ?`;
             const loAcValues = validLOIds.map(lo => [lo, id, null, null]);
-
             if (loAcValues.length > 0) {
                 await connection.query(insertMappingQuery, [loAcValues]);
             }
-
-            for (const lo of validLOIds) {
+        
+            const removedLOIds = currentLOIds.filter(lo => !newLOIds.includes(lo));
+        
+            for (const removedLo of removedLOIds) {
+                // Recalculate LO score
+                await recalculateLOScore(connection, removedLo);
+        
+                // Check if LO is still mapped to any AC
+                const [remainingAcMappings] = await connection.execute(
+                    "SELECT ac FROM lo_ac_mapping WHERE lo = ?",
+                    [removedLo]
+                );
+        
+                if (remainingAcMappings.length === 0) {
+                    // Do NOT delete ro_lo_mapping here (keep mappings)
+        
+                    // Delete LO scores for all students as LO is no longer mapped to any AC
+                    await connection.execute(
+                        "DELETE FROM lo_scores WHERE lo = ?",
+                        [removedLo]
+                    );
+                }
+        
+                // Recalculate affected ROs linked to this LO
+                const [affectedRos] = await connection.execute(
+                    `SELECT DISTINCT ro FROM ro_lo_mapping WHERE lo = ?`,
+                    [removedLo]
+                );
+                for (const ro of affectedRos.map(r => r.ro)) {
+                    await recalculateROScore(connection, ro, classname, section, year, effectiveQuarter);
+                }
+            }
+        
+            for (const lo of newLOIds) {
                 await recalculateLOScore(connection, lo);
             }
-
-            const [affectedROs] = await connection.execute(
+        
+            const [newAffectedROs] = await connection.execute(
                 `SELECT DISTINCT ro FROM ro_lo_mapping WHERE lo IN (?)`,
-                [validLOIds]
+                [newLOIds]
             );
-
-            for (const ro of affectedROs.map(r => r.ro)) {
+        
+            for (const ro of newAffectedROs.map(r => r.ro)) {
                 await recalculateROScore(connection, ro, classname, section, year, effectiveQuarter);
             }
         }
+        
 
         const maxMarksChanged = parseFloat(currentMaxMarks) !== parseFloat(max_marks);
         if (maxMarksChanged) {
@@ -255,6 +292,7 @@ const updateAssessmentCriteria = async (req, res) => {
         connection.release();
     }
 };
+
 
 const removeAssessmentCriteria = async (req, res) => {
     const { id } = req.query;
@@ -315,16 +353,21 @@ const removeAssessmentCriteria = async (req, res) => {
         }
 
         // RO recalculation
-        const placeholders = Array.from(loRecalculateList).map(() => '?').join(',');
-        const [affectedROs] = await connection.execute(
-            `SELECT DISTINCT ro FROM ro_lo_mapping WHERE lo IN (${placeholders})`,
-            [...loRecalculateList]
-        );
+        const loIdsArray = Array.from(loRecalculateList);
 
-        const roIds = new Set(affectedROs.map(row => row.ro));
-        for (const ro of roIds) {
-            await recalculateROScore(connection, ro, classname, section, year, quarter);
+        if (loIdsArray.length > 0) {
+            const placeholders = loIdsArray.map(() => '?').join(',');
+            const [affectedROs] = await connection.execute(
+                `SELECT DISTINCT ro FROM ro_lo_mapping WHERE lo IN (${placeholders})`,
+                loIdsArray
+            );
+
+            const roIds = new Set(affectedROs.map(row => row.ro));
+            for (const ro of roIds) {
+                await recalculateROScore(connection, ro, classname, section, year, quarter);
+            }
         }
+
 
         await connection.commit();
         return res.status(200).json({
