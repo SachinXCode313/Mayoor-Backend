@@ -115,12 +115,6 @@ const addLearningOutcome = async (req, res) => {
         connection.release(); // Release connection back to the pool
     }
 };
-
-const priorityValues = {
-    h: 0.5,
-    m: 0.3,
-    l: 0.2,
-};
 const updateLearningOutcome = async (req, res) => {
     const connection = await db.getConnection();
     await connection.beginTransaction();
@@ -130,7 +124,6 @@ const updateLearningOutcome = async (req, res) => {
         const { year, quarter, classname, section, subject } = req.headers;
         const { name, ro_id } = req.body;
 
-        // Validation
         if (!id || !year || !quarter || !classname || !section || !subject) {
             return res.status(400).json({
                 error: "Missing required parameters: id (query) and headers year, quarter, classname, section, subject."
@@ -143,62 +136,84 @@ const updateLearningOutcome = async (req, res) => {
             });
         }
 
-        // Check if LO exists
+        // Check LO exists
         const [existingLO] = await connection.query("SELECT * FROM learning_outcomes WHERE id = ?", [id]);
         if (existingLO.length === 0) {
             return res.status(404).json({ error: `Learning Outcome with id ${id} not found.` });
         }
 
-        // Update LO name if provided
+        // Update LO name
         if (name) {
             await connection.query("UPDATE learning_outcomes SET name = ? WHERE id = ?", [name, id]);
         }
 
-        // If ro_id array provided, update RO mappings for this LO
+        // Prepare sets to track old and new RO IDs
+        let oldROIds = [];
         if (ro_id && Array.isArray(ro_id)) {
-            // Validate all RO IDs exist
+            // Get old RO IDs mapped to this LO BEFORE deletion
+            const [oldROMappingRows] = await connection.query(
+                "SELECT DISTINCT ro FROM ro_lo_mapping WHERE lo = ?",
+                [id]
+            );
+            oldROIds = oldROMappingRows.map(row => row.ro);
+
+            // Validate new RO ids
             const [validROs] = await connection.query(
                 `SELECT id FROM report_outcomes WHERE id IN (?)`,
                 [ro_id]
             );
             const validROIds = validROs.map(r => r.id);
+
             for (const rid of ro_id) {
                 if (!validROIds.includes(rid)) {
                     return res.status(400).json({ error: `Invalid RO id: ${rid}` });
                 }
             }
 
-            // Delete existing mappings for this LO (to avoid duplicates)
+            // Delete old mappings
             await connection.query("DELETE FROM ro_lo_mapping WHERE lo = ?", [id]);
 
-            // Insert new mappings with default priority 'm' and weight 0.3
+            // Insert new mappings without priority and weight
             for (const rid of ro_id) {
                 await connection.query(
-                    `INSERT INTO ro_lo_mapping (ro, lo, priority, weight)
-                     VALUES (?, ?, 'm', 0.3)
-                     ON DUPLICATE KEY UPDATE priority = VALUES(priority), weight = VALUES(weight)`,
+                    `INSERT INTO ro_lo_mapping (ro, lo) VALUES (?, ?)`,
                     [rid, id]
                 );
             }
         }
 
-        // After updating LO and mappings, recalculate RO scores for affected ROs
-        // Combine all affected RO ids: those in ro_id (if provided) plus old ROs linked to this LO
+        // After update, check if old ROs have any LOs mapped
+        for (const oldRoId of oldROIds) {
+            const [countRows] = await connection.query(
+                "SELECT COUNT(*) as cnt FROM ro_lo_mapping WHERE ro = ?",
+                [oldRoId]
+            );
+            if (countRows[0].cnt === 0) {
+                // No LOs mapped to this RO now — remove its score
+                await connection.query(
+                    "DELETE FROM ro_scores WHERE ro = ? AND quarter = ?",
+                    [oldRoId, quarter]
+                );
+            }
+        }
+
+        // Collect all affected RO IDs (old + new + current mappings)
         const affectedROsSet = new Set();
 
         if (ro_id && Array.isArray(ro_id)) {
             ro_id.forEach(rid => affectedROsSet.add(rid));
         }
 
-        // Find all ROs currently mapped to this LO
         const [currentROMappings] = await connection.query(
             "SELECT DISTINCT ro FROM ro_lo_mapping WHERE lo = ?",
             [id]
         );
         currentROMappings.forEach(row => affectedROsSet.add(row.ro));
 
-        const affectedROs = Array.from(affectedROsSet);
+        // Also add oldROIds because some may still be mapped
+        oldROIds.forEach(rid => affectedROsSet.add(rid));
 
+        const affectedROs = Array.from(affectedROsSet);
         let allWarnings = [];
 
         for (const roId of affectedROs) {
@@ -207,9 +222,8 @@ const updateLearningOutcome = async (req, res) => {
         }
 
         await connection.commit();
-
         res.status(200).json({
-            message: "Learning Outcome updated and RO scores recalculated successfully.",
+            message: "Learning Outcome updated and RO mappings saved (priority left empty). RO scores recalculated and obsolete RO scores removed.",
             warnings: allWarnings
         });
 

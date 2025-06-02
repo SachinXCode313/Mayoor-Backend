@@ -35,13 +35,17 @@ const getStudentReport = async (req, res) => {
 
         const response = {
             student_id: studentid,
-            ac_scores: acResults,
+            ac_scores: acResults.map(score => ({
+                ...score,
+                value: parseFloat(score.value).toFixed(2)
+            })),
             lo_scores: loResults,
             ro_scores: roResults,
             avg_ac: calculateAvg(acResults),
             avg_lo: calculateAvg(loResults),
             avg_ro: calculateAvg(roResults)
         };
+        
 
         res.status(200).json(response);
     } catch (err) {
