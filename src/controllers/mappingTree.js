@@ -9,25 +9,26 @@ const getMappingTree = async (req, res) => {
         }
 
         const query = `
-            SELECT
-                ro.id AS ro_id, ro.name AS ro_name,
-                lo.id AS lo_id, lo.name AS lo_name,
-                ac.id AS ac_id, ac.name AS ac_name
-            FROM report_outcomes ro
-            LEFT JOIN ro_lo_mapping rlm ON ro.id = rlm.ro
-            LEFT JOIN learning_outcomes lo ON rlm.lo = lo.id
-            LEFT JOIN lo_ac_mapping lam ON lo.id = lam.lo
-            LEFT JOIN assessment_criterias ac ON lam.ac = ac.id
-            WHERE ro.subject = ?
-              AND ro.year = ?
-              AND lo.class = ?
-              AND lo.quarter = ?
-              AND ac.class = ?
-              AND ac.quarter = ?
-            ORDER BY ro.id, lo.id, ac.id;
-        `;
+    SELECT
+        ro.id AS ro_id, ro.name AS ro_name,
+        lo.id AS lo_id, lo.name AS lo_name,
+        ac.id AS ac_id, ac.name AS ac_name
+    FROM report_outcomes ro
+    LEFT JOIN ro_lo_mapping rlm ON ro.id = rlm.ro
+    LEFT JOIN learning_outcomes lo ON rlm.lo = lo.id
+        AND lo.class = ?
+        AND lo.quarter = ?
+    LEFT JOIN lo_ac_mapping lam ON lo.id = lam.lo
+    LEFT JOIN assessment_criterias ac ON lam.ac = ac.id
+        AND ac.class = ?
+        AND ac.quarter = ?
+    WHERE ro.subject = ?
+      AND ro.year = ?
+    ORDER BY ro.id, lo.id, ac.id;
+`;
 
-        const [rows] = await db.query(query, [subject, year, classname, quarter, classname, quarter]);
+        const [rows] = await db.query(query, [classname, quarter, classname, quarter, subject, year]);
+
 
         const roMap = new Map();
 
