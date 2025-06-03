@@ -13,7 +13,7 @@ const getAssessmentCriteriaScores = async (req, res) => {
         const query = `
             SELECT sr.student, s.name AS student_name, acs.value
             FROM (
-                SELECT student,
+                SELECT id, student,
                     ROW_NUMBER() OVER (ORDER BY student) AS student_position
                 FROM students_records
                 WHERE class = ? AND year = ? AND section = ?
