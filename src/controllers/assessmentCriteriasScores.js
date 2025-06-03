@@ -84,7 +84,7 @@ const updateAssessmentCriteriaScore = async (req, res) => {
     }
 };
 
-const recalculateAcScores = async (ac_id, year, quarter, classname, section, scores) => {
+const   recalculateAcScores = async (ac_id, year, quarter, classname, section, scores) => {
     const connection = await db.getConnection();
     await connection.beginTransaction();
 
