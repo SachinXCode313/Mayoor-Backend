@@ -156,13 +156,13 @@ const updateLearningOutcomeMapping = async (req, res) => {
         const currentPriorityMap = new Map(existingMappings.map(row => [row.ac, row.priority]));
 
         const [studentRows] = await connection.query(
-            "SELECT student FROM students_records WHERE year = ? AND class = ? AND section = ?",
+            "SELECT id FROM students_records WHERE year = ? AND class = ? AND section = ?",
             [year, classname, section]
         );
         if (studentRows.length === 0) {
             return res.status(404).json({ error: "No students found in students_records for the given filters." });
         }
-        const studentIds = studentRows.map(row => ({ student_id: row.student }));
+        const studentIds = studentRows.map(row => ({ student_id: row.id }));
 
         const inputAcIds = data.map(item => item.ac_id);
         const [validAcRows] = await connection.query(

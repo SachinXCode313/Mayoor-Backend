@@ -15,7 +15,7 @@ const recalculateROScore = async (connection, ro_id, classname = null, section =
             `SELECT DISTINCT rlm.lo, rlm.priority 
              FROM ro_lo_mapping rlm
              JOIN lo_scores ls ON rlm.lo = ls.lo
-             JOIN students_records s ON ls.student = s.student
+             JOIN students_records s ON ls.student = s.id
              WHERE rlm.ro = ?
              AND class = ? AND section = ? AND year = ? `,
             [ro_id, classname, section, year]
@@ -29,7 +29,7 @@ const recalculateROScore = async (connection, ro_id, classname = null, section =
                  WHERE ro = ?
                  AND quarter = ?
                  AND student IN (
-                    SELECT student FROM students_records
+                    SELECT id FROM students_records
                     WHERE class = ? AND section = ? AND year = ?
                  )`,
                 [ro_id, quarter, classname, section, year]
@@ -42,7 +42,7 @@ const recalculateROScore = async (connection, ro_id, classname = null, section =
         const [studentRows] = await connection.query(
             `SELECT DISTINCT ls.student 
              FROM lo_scores ls
-             JOIN students_records s ON ls.student = s.student
+             JOIN students_records s ON ls.student = s.id
              WHERE ls.lo IN (${mappings.map(() => '?').join(',')})
              AND s.class = ? AND s.section = ? AND s.year = ?`,
             [...mappings.map(row => row.lo), classname, section, year]
@@ -54,7 +54,7 @@ const recalculateROScore = async (connection, ro_id, classname = null, section =
                  WHERE ro = ?
                  AND quarter = ?
                  AND student IN (
-                    SELECT student FROM students_records
+                    SELECT id FROM students_records
                     WHERE class = ? AND section = ? AND year = ?
                  )`,
                 [ro_id, quarter, classname, section, year]
@@ -82,7 +82,7 @@ const recalculateROScore = async (connection, ro_id, classname = null, section =
                 `DELETE FROM ro_scores 
                  WHERE ro = ? AND quarter = ?
                  AND student IN (
-                    SELECT student FROM students_records
+                    SELECT id FROM students_records
                     WHERE class = ? AND section = ? AND year = ?
                  )`,
                 [ro_id, quarter, classname, section, year]
@@ -258,9 +258,9 @@ const updateReportOutcomeMapping = async (req, res) => {
 
         if (mappingChanged) {
             const [studentRows] = await connection.query(`
-                SELECT DISTINCT sr.student AS student_id
+                SELECT DISTINCT sr.id AS student_id
                 FROM students_records sr
-                JOIN lo_scores ls ON sr.student = ls.student
+                JOIN lo_scores ls ON sr.id = ls.student
                 JOIN ro_lo_mapping rlm ON ls.lo = rlm.lo
                 WHERE rlm.ro = ?
                   AND sr.class = ?

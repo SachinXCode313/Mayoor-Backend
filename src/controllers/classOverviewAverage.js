@@ -31,7 +31,7 @@ const getClassAverageAC = async (req, res) => {
                 COALESCE(AVG(ascr.value), NULL) AS average_score
             FROM assessment_criterias ac
             LEFT JOIN ac_scores ascr ON ascr.ac = ac.id
-            LEFT JOIN students_records sr ON ascr.student = sr.student
+            LEFT JOIN students_records sr ON ascr.student = sr.id
             WHERE ac.id IN (?) AND sr.year = ? AND sr.class = ? AND sr.section = ?
             GROUP BY ac.id, ac.name
             ORDER BY ac.id;
@@ -41,7 +41,7 @@ const getClassAverageAC = async (req, res) => {
         const [students] = await db.query(`
             SELECT ascr.ac AS ac_id, s.id AS student_id, s.name AS student_name, ascr.value AS score
             FROM ac_scores ascr
-            JOIN students_records sr ON ascr.student = sr.student
+            JOIN students_records sr ON ascr.student = sr.id
             JOIN students s ON sr.student = s.id
             WHERE sr.year = ? AND sr.class = ? AND sr.section = ?
               AND ascr.ac IN (?)
@@ -173,7 +173,7 @@ const getClassAverageLO = async (req, res) => {
                 COALESCE(AVG(los.value), NULL) AS average_score
             FROM learning_outcomes lo
             LEFT JOIN lo_scores los ON los.lo = lo.id
-            LEFT JOIN students_records sr ON los.student = sr.student
+            LEFT JOIN students_records sr ON los.student = sr.id
             WHERE lo.subject = ? AND lo.quarter = ?
               AND (sr.year = ? AND sr.class = ? AND sr.section = ?)
             GROUP BY lo.id, lo.name
@@ -183,7 +183,7 @@ const getClassAverageLO = async (req, res) => {
         const [students] = await db.query(`
             SELECT los.lo AS lo_id, s.id AS student_id, s.name AS student_name, los.value AS score
             FROM lo_scores los
-            JOIN students_records sr ON los.student = sr.student
+            JOIN students_records sr ON los.student = sr.id
             JOIN students s ON sr.student = s.id
             WHERE sr.year = ? AND sr.class = ? AND sr.section = ? 
               AND los.lo IN (SELECT id FROM learning_outcomes WHERE subject = ? AND quarter = ?);
@@ -290,7 +290,7 @@ const getClassAverageRO = async (req, res) => {
                 COALESCE(AVG(ros.value), NULL) AS average_score
             FROM report_outcomes ro
             LEFT JOIN ro_scores ros ON ros.ro = ro.id
-            LEFT JOIN students_records sr ON ros.student = sr.student
+            LEFT JOIN students_records sr ON ros.student = sr.id
             WHERE ro.subject = ? AND ro.year = ?
               AND (sr.year = ? AND sr.class = ? AND sr.section = ? )
             GROUP BY ro.id, ro.name

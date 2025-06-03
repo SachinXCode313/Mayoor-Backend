@@ -115,6 +115,7 @@ const addLearningOutcome = async (req, res) => {
         connection.release(); // Release connection back to the pool
     }
 };
+
 const updateLearningOutcome = async (req, res) => {
     const connection = await db.getConnection();
     await connection.beginTransaction();
@@ -170,7 +171,7 @@ const updateLearningOutcome = async (req, res) => {
                 }
             }
 
-            // Delete old mappings
+            // Delete old mappingsu
             await connection.query("DELETE FROM ro_lo_mapping WHERE lo = ?", [id]);
 
             // Insert new mappings without priority and weight

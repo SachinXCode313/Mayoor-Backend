@@ -19,7 +19,7 @@ const getAssessmentCriteriaScores = async (req, res) => {
                 WHERE class = ? AND year = ? AND section = ?
             ) sr
             INNER JOIN students s ON sr.student = s.id
-            LEFT JOIN ac_scores acs ON sr.student = acs.student AND acs.ac = ?
+            LEFT JOIN ac_scores acs ON sr.id = acs.student AND acs.ac = ?
             LEFT JOIN assessment_criterias ac ON acs.ac = ac.id AND ac.quarter = ?
             ORDER BY sr.student_position;
 
