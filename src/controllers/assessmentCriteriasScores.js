@@ -11,7 +11,7 @@ const getAssessmentCriteriaScores = async (req, res) => {
 
     try {
         const query = `
-            SELECT sr.student, s.name AS student_name, acs.value
+            SELECT sr.id, sr.student, s.name AS student_name, acs.value
             FROM (
                 SELECT id, student,
                     ROW_NUMBER() OVER (ORDER BY student) AS student_position
@@ -32,8 +32,9 @@ const getAssessmentCriteriaScores = async (req, res) => {
             return res.status(404).json({ message: "No assessment scores found for the given filters." });
         }
 
-        const students = results.map(({ student, student_name, value }) => ({
-            student_id: student,
+        const students = results.map(({id, student, student_name, value }) => ({
+            id,
+            roll_no: student,
             student_name,
             value
         }));
