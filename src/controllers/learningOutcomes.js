@@ -120,7 +120,7 @@ const updateLearningOutcome = async (req, res) => {
     await connection.beginTransaction();
 
     try {
-        const { id } = req.query;
+        const { id} = req.query;
         const { year, quarter, classname, section, subject } = req.headers;
         const { name, ro_id } = req.body;
 

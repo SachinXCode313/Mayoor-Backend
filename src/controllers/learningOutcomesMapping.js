@@ -124,6 +124,7 @@ const updateLearningOutcomeMapping = async (req, res) => {
     await connection.beginTransaction();
 
     try {
+        debugger;
         const { lo_id } = req.query;
         const { year, quarter, classname, section, subject } = req.headers;
         const { data } = req.body;
@@ -143,6 +144,7 @@ const updateLearningOutcomeMapping = async (req, res) => {
             }
         }
 
+        debugger;
         const [roRows] = await connection.query(
             "SELECT ro FROM ro_lo_mapping WHERE lo = ?",
             [lo_id]
@@ -176,30 +178,14 @@ const updateLearningOutcomeMapping = async (req, res) => {
 
         let priorityChanged = false;
 
-        // Find old mappings to remap
-        const [oldMappings] = await connection.query(
-            "SELECT lo, ac FROM lo_ac_mapping WHERE ac IN (?) AND lo != ?",
-            [inputAcIds, lo_id]
-        );
+        debugger;
+        // No deletion of old AC-LO mappings — they are kept
+        // We simply update if priority is different or insert if not existing
 
-        const loToRemovedAcs = {};
-        for (const row of oldMappings) {
-            if (!loToRemovedAcs[row.lo]) loToRemovedAcs[row.lo] = [];
-            loToRemovedAcs[row.lo].push({ ac_id: row.ac });
-        }
-
-        for (const oldLoId in loToRemovedAcs) {
-            const removedAcs = loToRemovedAcs[oldLoId].map(item => item.ac_id);
-            await connection.query(
-                "DELETE FROM lo_ac_mapping WHERE lo = ? AND ac IN (?)",
-                [oldLoId, removedAcs]
-            );
-        }
-
-        // Insert or update new mappings
         for (const item of data) {
             const { ac_id, priority } = item;
             const existingPriority = currentPriorityMap.get(ac_id);
+
             if (existingPriority !== undefined) {
                 if (existingPriority !== priority) {
                     priorityChanged = true;
@@ -219,48 +205,12 @@ const updateLearningOutcomeMapping = async (req, res) => {
 
         let allWarnings = [];
 
-        // Recalculate for current LO
+        // Recalculate LO score for current LO
+        debugger;
         const loWarnings = await recalculateLOScore(connection, lo_id, studentIds);
         allWarnings.push(...loWarnings);
 
-        // Process old LOs affected by AC reassignment
-        for (const oldLoId in loToRemovedAcs) {
-            const [remainingMappings] = await connection.query(
-                "SELECT ac FROM lo_ac_mapping WHERE lo = ?",
-                [oldLoId]
-            );
-
-            if (remainingMappings.length === 0) {
-                // Delete LO scores
-                await connection.query(
-                    "DELETE FROM lo_scores WHERE lo = ? AND student IN (?)",
-                    [oldLoId, studentIds.map(s => s.student_id)]
-                );
-                allWarnings.push(`LO ${oldLoId} has no remaining ACs. LO scores deleted.`);
-
-                // Delete RO-LO mapping
-                await connection.query(
-                    "DELETE FROM ro_lo_mapping WHERE lo = ?",
-                    [oldLoId]
-                );
-                allWarnings.push(`RO-LO mapping for LO ${oldLoId} deleted as it has no ACs.`);
-            } else {
-                const oldLoWarnings = await recalculateLOScore(connection, oldLoId, studentIds);
-                allWarnings.push(...oldLoWarnings);
-            }
-
-            const [oldRoRows] = await connection.query(
-                "SELECT ro FROM ro_lo_mapping WHERE lo = ?",
-                [oldLoId]
-            );
-
-            for (const row of oldRoRows) {
-                const oldRoWarnings = await recalculateROScore(connection, row.ro, classname, section, year, quarter);
-                allWarnings.push(...oldRoWarnings);
-            }
-        }
-
-        // Recalculate for current RO(s)
+        // Recalculate RO(s) for current LO
         for (const ro_id of roIds) {
             const roWarnings = await recalculateROScore(connection, ro_id, classname, section, year, quarter);
             allWarnings.push(...roWarnings);
@@ -268,6 +218,7 @@ const updateLearningOutcomeMapping = async (req, res) => {
 
         await connection.commit();
 
+        debugger;
         res.status(200).json({
             message: `LO mapping updated successfully. ${priorityChanged ? "Priorities updated." : "No changes in priorities, but recalculation done."}`,
             warnings: allWarnings.length ? allWarnings : "No warnings.",
@@ -282,6 +233,7 @@ const updateLearningOutcomeMapping = async (req, res) => {
         connection.release();
     }
 };
+
 
 
 
