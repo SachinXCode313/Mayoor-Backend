@@ -8,12 +8,10 @@ const getClassAverageAC = async (req, res) => {
         if (!subject || !classname || !year || !quarter || !section) {
             return res.status(400).json({ error: "Missing required headers." });
         }
-
-        // Fetch relevant ACs based on subject and quarter
         const [acs] = await db.query(`
             SELECT id, name FROM assessment_criterias
-            WHERE subject = ? AND quarter = ?
-        `, [subject, quarter]);
+            WHERE subject = ? AND quarter = ? AND class = ? AND year = ?
+        `, [subject, quarter, classname, year]);
 
         const acIds = acs.map(ac => ac.id);
         if (acIds.length === 0) {
@@ -28,7 +26,7 @@ const getClassAverageAC = async (req, res) => {
         const [acAverages] = await db.query(`
             SELECT 
                 ac.id AS ac_id, ac.name AS ac_name, 
-                COALESCE(AVG(ascr.value), NULL) AS average_score
+                AVG(CASE WHEN ascr.value IS NOT NULL THEN ascr.value END) AS average_score
             FROM assessment_criterias ac
             LEFT JOIN ac_scores ascr ON ascr.ac = ac.id
             LEFT JOIN students_records sr ON ascr.student = sr.student
@@ -133,17 +131,25 @@ const getClassAverageAC = async (req, res) => {
             below_average: []
         };
 
-        studentAverages.forEach(({ student_id, student_name, average }) => {
-            if (average === null || lowerBound === null || upperBound === null) {
-                distribution.average.push({ student_id, student_name, average: null, score: null });
-            } else if (average < lowerBound) {
-                distribution.below_average.push({ student_id, student_name, average, score: average });
-            } else if (average > upperBound) {
-                distribution.above_average.push({ student_id, student_name, average, score: average });
-            } else {
-                distribution.average.push({ student_id, student_name, average, score: average });
-            }
-        });
+        validStudentAverages.forEach(({ student_id, student_name, average }) => {
+    if (average === null || isNaN(average)) return; // ✅ Skip null averages
+
+    const studentEntry = {
+        student_id,
+        student_name,
+        average: parseFloat(average.toFixed(6)),
+        score: parseFloat(average.toFixed(6))
+    };
+
+    if (average < lowerBound) {
+        distribution.below_average.push(studentEntry);
+    } else if (average > upperBound) {
+        distribution.above_average.push(studentEntry);
+    } else {
+        distribution.average.push(studentEntry);
+    }
+});
+
 
         // Final response
         res.status(200).json({
